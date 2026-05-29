@@ -46,7 +46,46 @@ async def send_log(text):
         print(f"LOG ERROR : {e}")
 
 
-# ---------------- OWNER CHECK ---------------- #
+# ---------------- OWNER + ADMIN CHECK ---------------- #
+
+def admin_or_owner(func):
+
+    async def wrapper(client, message):
+
+        try:
+
+            user_id = message.from_user.id
+            chat_id = message.chat.id
+
+            # owner allowed
+            if user_id == OWNER_ID:
+                return await func(client, message)
+
+            # admin check
+            member = await app.get_chat_member(
+                chat_id,
+                user_id
+            )
+
+            if member.status in [
+                "administrator",
+                "owner"
+            ]:
+
+                return await func(client, message)
+
+            return await message.reply_text(
+                "❌ Only Owner Or Group Admin Can Use This Command"
+            )
+
+        except Exception as e:
+
+            print(e)
+
+    return wrapper
+
+
+# ---------------- OWNER ONLY ---------------- #
 
 def owner_only(func):
 
@@ -54,17 +93,9 @@ def owner_only(func):
 
         if message.from_user.id != OWNER_ID:
 
-            try:
-                await send_log(
-                    f"🚫 UNAUTHORIZED ACCESS\n\n"
-                    f"👤 User : {message.from_user.mention}\n"
-                    f"🆔 ID : `{message.from_user.id}`\n"
-                    f"💬 Chat : {message.chat.title}"
-                )
-            except:
-                pass
-
-            return
+            return await message.reply_text(
+                "❌ Only Bot Owner Can Use This"
+            )
 
         return await func(client, message)
 
@@ -74,7 +105,7 @@ def owner_only(func):
 # ---------------- PING ---------------- #
 
 @app.on_message(filters.command("ping", prefixes=["/", ".", "!"]))
-@owner_only
+@admin_or_owner
 async def ping(_, message: Message):
 
     await message.reply_text(
@@ -85,7 +116,7 @@ async def ping(_, message: Message):
 # ---------------- STOP TAG ---------------- #
 
 @app.on_message(filters.command("stoptag", prefixes=["/", ".", "!"]) & filters.group)
-@owner_only
+@admin_or_owner
 async def stop_tag(_, message: Message):
 
     chat_id = message.chat.id
@@ -123,11 +154,11 @@ async def whitelist(_, message: Message):
     )
 
 
-# ---------------- ALL TAG ---------------- #
+# ---------------- SUMMON TAG ---------------- #
 
-@app.on_message(filters.command("all", prefixes=["/", ".", "!"]) & filters.group)
-@owner_only
-async def tag_all(_, message: Message):
+@app.on_message(filters.command("summon", prefixes=["/", ".", "!"]) & filters.group)
+@admin_or_owner
+async def summon(_, message: Message):
 
     try:
 
@@ -159,14 +190,15 @@ async def tag_all(_, message: Message):
         if len(message.command) < 2:
 
             return await message.reply_text(
-                "❌ Example:\n/all hello everyone"
+                "❌ Example:\n/summon hello everyone"
             )
 
         text = message.text.split(None, 1)[1]
 
         await send_log(
-            f"📢 ALL TAG USED\n\n"
+            f"📢 SUMMON USED\n\n"
             f"👤 User : {message.from_user.mention}\n"
+            f"🆔 ID : `{message.from_user.id}`\n"
             f"💬 Chat : {message.chat.title}\n"
             f"📝 Message : {text}"
         )
@@ -176,7 +208,7 @@ async def tag_all(_, message: Message):
         tagged = 0
 
         progress = await message.reply_text(
-            "🚀 Tagging Started..."
+            "🚀 Summoning Started..."
         )
 
         unique_users = set()
@@ -187,7 +219,7 @@ async def tag_all(_, message: Message):
             if not active_tags.get(chat_id):
 
                 return await progress.edit_text(
-                    "🛑 Tagging Cancelled"
+                    "🛑 Summoning Cancelled"
                 )
 
             user = member.user
@@ -213,7 +245,7 @@ async def tag_all(_, message: Message):
 
                     try:
                         await progress.edit_text(
-                            f"🚀 Tagging Running...\n\n"
+                            f"🚀 Summoning Running...\n\n"
                             f"✅ Tagged : {tagged}"
                         )
                     except:
@@ -230,7 +262,7 @@ async def tag_all(_, message: Message):
                 continue
 
         await progress.edit_text(
-            f"✅ Tagging Completed\n\n"
+            f"✅ Summoning Completed\n\n"
             f"👥 Total Tagged : {tagged}"
         )
 
@@ -241,7 +273,7 @@ async def tag_all(_, message: Message):
         error = traceback.format_exc()
 
         await send_log(
-            f"❌ ALL TAG ERROR\n\n"
+            f"❌ SUMMON ERROR\n\n"
             f"{error}"
         )
 
@@ -253,7 +285,7 @@ async def tag_all(_, message: Message):
 # ---------------- ADMINS TAG ---------------- #
 
 @app.on_message(filters.command("admins", prefixes=["/", ".", "!"]) & filters.group)
-@owner_only
+@admin_or_owner
 async def admins(_, message: Message):
 
     try:
@@ -269,6 +301,7 @@ async def admins(_, message: Message):
         await send_log(
             f"👮 ADMINS TAG USED\n\n"
             f"👤 User : {message.from_user.mention}\n"
+            f"🆔 ID : `{message.from_user.id}`\n"
             f"💬 Chat : {message.chat.title}\n"
             f"📝 Message : {text}"
         )
@@ -338,21 +371,21 @@ async def admins(_, message: Message):
 # ---------------- HELP ---------------- #
 
 @app.on_message(filters.command("help", prefixes=["/", ".", "!"]))
-@owner_only
+@admin_or_owner
 async def help_command(_, message: Message):
 
     await message.reply_text(
         "📚 COMMANDS\n\n"
-        "/all message\n"
+        "/summon message\n"
         "→ Tag All Members One By One\n\n"
         "/admins message\n"
         "→ Tag Admins One By One\n\n"
         "/stoptag\n"
         "→ Stop Running Tag\n\n"
         "/blacklist\n"
-        "→ Disable Tag In Group\n\n"
+        "→ Disable Tag In Group (Owner Only)\n\n"
         "/whitelist\n"
-        "→ Enable Tag In Group\n\n"
+        "→ Enable Tag In Group (Owner Only)\n\n"
         "/ping\n"
         "→ Check Userbot"
     )
