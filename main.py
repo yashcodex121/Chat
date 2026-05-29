@@ -1,0 +1,375 @@
+import os
+import asyncio
+import traceback
+
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from pyrogram.errors import FloodWait
+
+# ---------------- CONFIG ---------------- #
+
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+
+SESSION_STRING = os.getenv("SESSION_STRING")
+
+OWNER_ID = int(os.getenv("OWNER_ID"))
+
+LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID"))
+
+# ---------------------------------------- #
+
+app = Client(
+    "Userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING
+)
+
+# ---------------- STORAGE ---------------- #
+
+tag_cooldown = {}
+
+active_tags = {}
+
+blacklist_groups = set()
+
+# ----------------------------------------- #
+
+
+# ---------------- LOG FUNCTION ---------------- #
+
+async def send_log(text):
+    try:
+        await app.send_message(LOG_GROUP_ID, text)
+    except Exception as e:
+        print(f"LOG ERROR : {e}")
+
+
+# ---------------- OWNER CHECK ---------------- #
+
+def owner_only(func):
+
+    async def wrapper(client, message):
+
+        if message.from_user.id != OWNER_ID:
+
+            try:
+                await send_log(
+                    f"🚫 UNAUTHORIZED ACCESS\n\n"
+                    f"👤 User : {message.from_user.mention}\n"
+                    f"🆔 ID : `{message.from_user.id}`\n"
+                    f"💬 Chat : {message.chat.title}"
+                )
+            except:
+                pass
+
+            return
+
+        return await func(client, message)
+
+    return wrapper
+
+
+# ---------------- PING ---------------- #
+
+@app.on_message(filters.command("ping", prefixes=["/", ".", "!"]))
+@owner_only
+async def ping(_, message: Message):
+
+    await message.reply_text(
+        "✅ Userbot Active"
+    )
+
+
+# ---------------- STOP TAG ---------------- #
+
+@app.on_message(filters.command("stoptag", prefixes=["/", ".", "!"]) & filters.group)
+@owner_only
+async def stop_tag(_, message: Message):
+
+    chat_id = message.chat.id
+
+    active_tags[chat_id] = False
+
+    await message.reply_text(
+        "🛑 Tagging Stopped"
+    )
+
+
+# ---------------- BLACKLIST ---------------- #
+
+@app.on_message(filters.command("blacklist", prefixes=["/", ".", "!"]) & filters.group)
+@owner_only
+async def blacklist(_, message: Message):
+
+    blacklist_groups.add(message.chat.id)
+
+    await message.reply_text(
+        "🚫 Group Blacklisted"
+    )
+
+
+# ---------------- WHITELIST ---------------- #
+
+@app.on_message(filters.command("whitelist", prefixes=["/", ".", "!"]) & filters.group)
+@owner_only
+async def whitelist(_, message: Message):
+
+    blacklist_groups.discard(message.chat.id)
+
+    await message.reply_text(
+        "✅ Group Whitelisted"
+    )
+
+
+# ---------------- TAG ALL ---------------- #
+
+@app.on_message(filters.command("tagall", prefixes=["/", ".", "!"]) & filters.group)
+@owner_only
+async def tag_all(_, message: Message):
+
+    try:
+
+        chat_id = message.chat.id
+
+        # -------- BLACKLIST CHECK -------- #
+
+        if chat_id in blacklist_groups:
+
+            return await message.reply_text(
+                "🚫 This Group Is Blacklisted"
+            )
+
+        # -------- COOLDOWN -------- #
+
+        if chat_id in tag_cooldown:
+
+            remaining = tag_cooldown[chat_id] - asyncio.get_event_loop().time()
+
+            if remaining > 0:
+
+                return await message.reply_text(
+                    f"❌ Anti Spam Active\n\n"
+                    f"⏳ Wait {int(remaining)} sec"
+                )
+
+        # 60 sec cooldown
+        tag_cooldown[chat_id] = asyncio.get_event_loop().time() + 60
+
+        # ------------------------- #
+
+        if len(message.command) < 2:
+
+            return await message.reply_text(
+                "❌ Example:\n/tagall hello everyone"
+            )
+
+        text = message.text.split(None, 1)[1]
+
+        await send_log(
+            f"📢 TAGALL USED\n\n"
+            f"👤 User : {message.from_user.mention}\n"
+            f"💬 Chat : {message.chat.title}\n"
+            f"📝 Message : {text}"
+        )
+
+        members = []
+
+        unique_users = set()
+
+        async for member in app.get_chat_members(chat_id):
+
+            user = member.user
+
+            if user.is_bot:
+                continue
+
+            if user.id in unique_users:
+                continue
+
+            unique_users.add(user.id)
+
+            members.append(user)
+
+        active_tags[chat_id] = True
+
+        count = 0
+        mention_text = ""
+        tagged = 0
+
+        progress_msg = await message.reply_text(
+            "🚀 Tagging Started..."
+        )
+
+        for user in members:
+
+            # -------- STOP CHECK -------- #
+
+            if not active_tags.get(chat_id):
+
+                return await progress_msg.edit_text(
+                    "🛑 Tagging Cancelled"
+                )
+
+            # ---------------------------- #
+
+            mention_text += (
+                f"[{user.first_name}]"
+                f"(tg://user?id={user.id}) "
+            )
+
+            count += 1
+            tagged += 1
+
+            # 5 users per message
+            if count == 5:
+
+                await message.reply_text(
+                    f"{mention_text}\n\n{text}"
+                )
+
+                await asyncio.sleep(3)
+
+                count = 0
+                mention_text = ""
+
+                # progress update
+                try:
+                    await progress_msg.edit_text(
+                        f"🚀 Tagging Running...\n\n"
+                        f"✅ Tagged : {tagged}"
+                    )
+                except:
+                    pass
+
+        if mention_text:
+
+            await message.reply_text(
+                f"{mention_text}\n\n{text}"
+            )
+
+        await progress_msg.edit_text(
+            f"✅ Tagging Completed\n\n"
+            f"👥 Total Tagged : {tagged}"
+        )
+
+        active_tags[chat_id] = False
+
+    except FloodWait as e:
+
+        await asyncio.sleep(e.value)
+
+    except Exception:
+
+        error = traceback.format_exc()
+
+        await send_log(
+            f"❌ TAGALL ERROR\n\n"
+            f"{error}"
+        )
+
+        await message.reply_text(
+            "❌ Error aa gaya."
+        )
+
+
+# ---------------- ADMINS TAG ---------------- #
+
+@app.on_message(filters.command("admins", prefixes=["/", ".", "!"]) & filters.group)
+@owner_only
+async def admins(_, message: Message):
+
+    try:
+
+        if len(message.command) < 2:
+
+            return await message.reply_text(
+                "❌ Example:\n/admins meeting now"
+            )
+
+        text = message.text.split(None, 1)[1]
+
+        await send_log(
+            f"👮 ADMINS TAG USED\n\n"
+            f"👤 User : {message.from_user.mention}\n"
+            f"💬 Chat : {message.chat.title}\n"
+            f"📝 Message : {text}"
+        )
+
+        mention_text = ""
+
+        unique_admins = set()
+
+        async for admin in app.get_chat_members(
+            message.chat.id,
+            filter="administrators"
+        ):
+
+            user = admin.user
+
+            if user.is_bot:
+                continue
+
+            if user.id in unique_admins:
+                continue
+
+            unique_admins.add(user.id)
+
+            mention_text += (
+                f"[{user.first_name}]"
+                f"(tg://user?id={user.id}) "
+            )
+
+        await message.reply_text(
+            f"{mention_text}\n\n{text}"
+        )
+
+    except Exception:
+
+        error = traceback.format_exc()
+
+        await send_log(
+            f"❌ ADMINS ERROR\n\n"
+            f"{error}"
+        )
+
+        await message.reply_text(
+            "❌ Error aa gaya."
+        )
+
+
+# ---------------- HELP ---------------- #
+
+@app.on_message(filters.command("help", prefixes=["/", ".", "!"]))
+@owner_only
+async def help_command(_, message: Message):
+
+    await message.reply_text(
+        "📚 COMMANDS\n\n"
+        "/tagall message\n"
+        "→ Tag All Members\n\n"
+        "/admins message\n"
+        "→ Tag Admins\n\n"
+        "/stoptag\n"
+        "→ Stop Running Tag\n\n"
+        "/blacklist\n"
+        "→ Disable Tag In Group\n\n"
+        "/whitelist\n"
+        "→ Enable Tag In Group\n\n"
+        "/ping\n"
+        "→ Check Userbot"
+    )
+
+
+# ---------------- START ---------------- #
+
+print("✅ Userbot Started Successfully")
+
+try:
+
+    app.run()
+
+except Exception as e:
+
+    print(e)
