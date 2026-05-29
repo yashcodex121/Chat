@@ -40,8 +40,13 @@ blacklist_groups = set()
 # ---------------- LOG FUNCTION ---------------- #
 
 async def send_log(text):
+
     try:
-        await app.send_message(LOG_GROUP_ID, text)
+        await app.send_message(
+            LOG_GROUP_ID,
+            text
+        )
+
     except Exception as e:
         print(f"LOG ERROR : {e}")
 
@@ -54,24 +59,27 @@ def admin_or_owner(func):
 
         try:
 
+            if not message.from_user:
+                return
+
             user_id = message.from_user.id
             chat_id = message.chat.id
 
-            # owner allowed
+            # owner access
             if user_id == OWNER_ID:
                 return await func(client, message)
 
-            # admin check
-            member = await app.get_chat_member(
+            admins = []
+
+            async for member in app.get_chat_members(
                 chat_id,
-                user_id
-            )
+                filter="administrators"
+            ):
 
-            if member.status in [
-                "administrator",
-                "owner"
-            ]:
+                admins.append(member.user.id)
 
+            # admin access
+            if user_id in admins:
                 return await func(client, message)
 
             return await message.reply_text(
@@ -80,7 +88,11 @@ def admin_or_owner(func):
 
         except Exception as e:
 
-            print(e)
+            print(f"ADMIN CHECK ERROR : {e}")
+
+            return await message.reply_text(
+                "❌ Admin Check Failed"
+            )
 
     return wrapper
 
@@ -91,13 +103,18 @@ def owner_only(func):
 
     async def wrapper(client, message):
 
-        if message.from_user.id != OWNER_ID:
+        try:
 
-            return await message.reply_text(
-                "❌ Only Bot Owner Can Use This"
-            )
+            if message.from_user.id != OWNER_ID:
 
-        return await func(client, message)
+                return await message.reply_text(
+                    "❌ Only Bot Owner Can Use This"
+                )
+
+            return await func(client, message)
+
+        except Exception as e:
+            print(e)
 
     return wrapper
 
@@ -124,7 +141,7 @@ async def stop_tag(_, message: Message):
     active_tags[chat_id] = False
 
     await message.reply_text(
-        "🛑 Tagging Stopped"
+        "🛑 Summoning Stopped"
     )
 
 
@@ -154,13 +171,15 @@ async def whitelist(_, message: Message):
     )
 
 
-# ---------------- SUMMON TAG ---------------- #
+# ---------------- SUMMON ---------------- #
 
 @app.on_message(filters.command("summon", prefixes=["/", ".", "!"]) & filters.group)
 @admin_or_owner
 async def summon(_, message: Message):
 
     try:
+
+        print(f"COMMAND RECEIVED : {message.chat.title}")
 
         chat_id = message.chat.id
 
@@ -171,7 +190,7 @@ async def summon(_, message: Message):
                 "🚫 This Group Is Blacklisted"
             )
 
-        # cooldown
+        # cooldown check
         if chat_id in tag_cooldown:
 
             remaining = tag_cooldown[chat_id] - asyncio.get_event_loop().time()
@@ -183,7 +202,7 @@ async def summon(_, message: Message):
                     f"⏳ Wait {int(remaining)} sec"
                 )
 
-        # cooldown time
+        # 60 sec cooldown
         tag_cooldown[chat_id] = asyncio.get_event_loop().time() + 60
 
         # command message
@@ -195,6 +214,7 @@ async def summon(_, message: Message):
 
         text = message.text.split(None, 1)[1]
 
+        # log
         await send_log(
             f"📢 SUMMON USED\n\n"
             f"👤 User : {message.from_user.mention}\n"
@@ -224,9 +244,15 @@ async def summon(_, message: Message):
 
             user = member.user
 
+            # skip deleted users
+            if user.is_deleted:
+                continue
+
+            # skip bots
             if user.is_bot:
                 continue
 
+            # duplicate protection
             if user.id in unique_users:
                 continue
 
@@ -234,7 +260,8 @@ async def summon(_, message: Message):
 
             try:
 
-                await message.reply_text(
+                await app.send_message(
+                    chat_id,
                     f"[{user.first_name}](tg://user?id={user.id}) {text}"
                 )
 
@@ -244,10 +271,12 @@ async def summon(_, message: Message):
                 if tagged % 10 == 0:
 
                     try:
+
                         await progress.edit_text(
                             f"🚀 Summoning Running...\n\n"
                             f"✅ Tagged : {tagged}"
                         )
+
                     except:
                         pass
 
@@ -258,19 +287,26 @@ async def summon(_, message: Message):
 
                 await asyncio.sleep(e.value)
 
-            except Exception:
+            except Exception as e:
+
+                print(f"TAG ERROR : {e}")
+
                 continue
+
+        active_tags[chat_id] = False
 
         await progress.edit_text(
             f"✅ Summoning Completed\n\n"
             f"👥 Total Tagged : {tagged}"
         )
 
-        active_tags[chat_id] = False
-
     except Exception:
 
+        active_tags[chat_id] = False
+
         error = traceback.format_exc()
+
+        print(error)
 
         await send_log(
             f"❌ SUMMON ERROR\n\n"
@@ -278,7 +314,7 @@ async def summon(_, message: Message):
         )
 
         await message.reply_text(
-            "❌ Error aa gaya."
+            "❌ Error Aa Gaya"
         )
 
 
@@ -290,6 +326,8 @@ async def admins(_, message: Message):
 
     try:
 
+        chat_id = message.chat.id
+
         if len(message.command) < 2:
 
             return await message.reply_text(
@@ -298,29 +336,31 @@ async def admins(_, message: Message):
 
         text = message.text.split(None, 1)[1]
 
+        # log
         await send_log(
-            f"👮 ADMINS TAG USED\n\n"
+            f"👮 ADMINS USED\n\n"
             f"👤 User : {message.from_user.mention}\n"
             f"🆔 ID : `{message.from_user.id}`\n"
             f"💬 Chat : {message.chat.title}\n"
             f"📝 Message : {text}"
         )
 
-        unique_admins = set()
-
-        active_tags[message.chat.id] = True
+        active_tags[chat_id] = True
 
         tagged = 0
 
-        async for admin in app.get_chat_members(
-            message.chat.id,
+        unique_admins = set()
+
+        async for member in app.get_chat_members(
+            chat_id,
             filter="administrators"
         ):
 
-            if not active_tags.get(message.chat.id):
+            # stop check
+            if not active_tags.get(chat_id):
                 break
 
-            user = admin.user
+            user = member.user
 
             if user.is_bot:
                 continue
@@ -332,7 +372,8 @@ async def admins(_, message: Message):
 
             try:
 
-                await message.reply_text(
+                await app.send_message(
+                    chat_id,
                     f"[{user.first_name}](tg://user?id={user.id}) {text}"
                 )
 
@@ -347,16 +388,20 @@ async def admins(_, message: Message):
             except Exception:
                 continue
 
+        active_tags[chat_id] = False
+
         await message.reply_text(
-            f"✅ Admin Tag Completed\n\n"
+            f"✅ Admin Summon Completed\n\n"
             f"👮 Tagged : {tagged}"
         )
 
-        active_tags[message.chat.id] = False
-
     except Exception:
 
+        active_tags[message.chat.id] = False
+
         error = traceback.format_exc()
+
+        print(error)
 
         await send_log(
             f"❌ ADMINS ERROR\n\n"
@@ -364,7 +409,7 @@ async def admins(_, message: Message):
         )
 
         await message.reply_text(
-            "❌ Error aa gaya."
+            "❌ Error Aa Gaya"
         )
 
 
@@ -377,15 +422,15 @@ async def help_command(_, message: Message):
     await message.reply_text(
         "📚 COMMANDS\n\n"
         "/summon message\n"
-        "→ Tag All Members One By One\n\n"
+        "→ Summon All Members One By One\n\n"
         "/admins message\n"
-        "→ Tag Admins One By One\n\n"
+        "→ Summon Admins One By One\n\n"
         "/stoptag\n"
-        "→ Stop Running Tag\n\n"
+        "→ Stop Running Summon\n\n"
         "/blacklist\n"
-        "→ Disable Tag In Group (Owner Only)\n\n"
+        "→ Disable Summon In Group (Owner Only)\n\n"
         "/whitelist\n"
-        "→ Enable Tag In Group (Owner Only)\n\n"
+        "→ Enable Summon In Group (Owner Only)\n\n"
         "/ping\n"
         "→ Check Userbot"
     )
