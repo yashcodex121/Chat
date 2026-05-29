@@ -5,6 +5,7 @@ import traceback
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.errors import FloodWait
+from pyrogram.enums import ChatMembersFilter
 
 # ---------------- CONFIG ---------------- #
 
@@ -37,7 +38,30 @@ blacklist_groups = set()
 # ----------------------------------------- #
 
 
-# ---------------- LOG FUNCTION ---------------- #
+# ---------------- SAFE ERROR LOG ---------------- #
+
+async def send_error_log(command_name, error_text):
+
+    try:
+
+        short_error = "\n".join(
+            error_text.splitlines()[-6:]
+        )
+
+        await app.send_message(
+            LOG_GROUP_ID,
+            f"❌ ERROR DETECTED\n\n"
+            f"📌 Command : {command_name}\n\n"
+            f"🛠 Hint : Check Recent Changes / Permissions / Flood Limits\n\n"
+            f"📄 Error:\n"
+            f"`{short_error}`"
+        )
+
+    except Exception as e:
+        print(e)
+
+
+# ---------------- SIMPLE LOG ---------------- #
 
 async def send_log(text):
 
@@ -47,8 +71,8 @@ async def send_log(text):
             text
         )
 
-    except Exception as e:
-        print(f"LOG ERROR : {e}")
+    except:
+        pass
 
 
 # ---------------- OWNER + ADMIN CHECK ---------------- #
@@ -73,7 +97,7 @@ def admin_or_owner(func):
 
             async for member in app.get_chat_members(
                 chat_id,
-                filter="administrators"
+                filter=ChatMembersFilter.ADMINISTRATORS
             ):
 
                 admins.append(member.user.id)
@@ -113,8 +137,8 @@ def owner_only(func):
 
             return await func(client, message)
 
-        except Exception as e:
-            print(e)
+        except:
+            return
 
     return wrapper
 
@@ -179,8 +203,6 @@ async def summon(_, message: Message):
 
     try:
 
-        print(f"COMMAND RECEIVED : {message.chat.title}")
-
         chat_id = message.chat.id
 
         # blacklist check
@@ -202,10 +224,10 @@ async def summon(_, message: Message):
                     f"⏳ Wait {int(remaining)} sec"
                 )
 
-        # 60 sec cooldown
+        # cooldown
         tag_cooldown[chat_id] = asyncio.get_event_loop().time() + 60
 
-        # command message
+        # check text
         if len(message.command) < 2:
 
             return await message.reply_text(
@@ -214,13 +236,9 @@ async def summon(_, message: Message):
 
         text = message.text.split(None, 1)[1]
 
-        # log
         await send_log(
-            f"📢 SUMMON USED\n\n"
-            f"👤 User : {message.from_user.mention}\n"
-            f"🆔 ID : `{message.from_user.id}`\n"
-            f"💬 Chat : {message.chat.title}\n"
-            f"📝 Message : {text}"
+            f"📢 SUMMON STARTED\n"
+            f"👤 {message.from_user.first_name}"
         )
 
         active_tags[chat_id] = True
@@ -287,10 +305,7 @@ async def summon(_, message: Message):
 
                 await asyncio.sleep(e.value)
 
-            except Exception as e:
-
-                print(f"TAG ERROR : {e}")
-
+            except Exception:
                 continue
 
         active_tags[chat_id] = False
@@ -308,9 +323,9 @@ async def summon(_, message: Message):
 
         print(error)
 
-        await send_log(
-            f"❌ SUMMON ERROR\n\n"
-            f"{error}"
+        await send_error_log(
+            "SUMMON",
+            error
         )
 
         await message.reply_text(
@@ -318,7 +333,7 @@ async def summon(_, message: Message):
         )
 
 
-# ---------------- ADMINS TAG ---------------- #
+# ---------------- ADMINS ---------------- #
 
 @app.on_message(filters.command("admins", prefixes=["/", ".", "!"]) & filters.group)
 @admin_or_owner
@@ -336,13 +351,9 @@ async def admins(_, message: Message):
 
         text = message.text.split(None, 1)[1]
 
-        # log
         await send_log(
-            f"👮 ADMINS USED\n\n"
-            f"👤 User : {message.from_user.mention}\n"
-            f"🆔 ID : `{message.from_user.id}`\n"
-            f"💬 Chat : {message.chat.title}\n"
-            f"📝 Message : {text}"
+            f"👮 ADMINS COMMAND STARTED\n"
+            f"👤 {message.from_user.first_name}"
         )
 
         active_tags[chat_id] = True
@@ -353,7 +364,7 @@ async def admins(_, message: Message):
 
         async for member in app.get_chat_members(
             chat_id,
-            filter="administrators"
+            filter=ChatMembersFilter.ADMINISTRATORS
         ):
 
             # stop check
@@ -403,9 +414,9 @@ async def admins(_, message: Message):
 
         print(error)
 
-        await send_log(
-            f"❌ ADMINS ERROR\n\n"
-            f"{error}"
+        await send_error_log(
+            "ADMINS",
+            error
         )
 
         await message.reply_text(
@@ -422,15 +433,15 @@ async def help_command(_, message: Message):
     await message.reply_text(
         "📚 COMMANDS\n\n"
         "/summon message\n"
-        "→ Summon All Members One By One\n\n"
+        "→ Summon All Members\n\n"
         "/admins message\n"
-        "→ Summon Admins One By One\n\n"
+        "→ Summon All Admins\n\n"
         "/stoptag\n"
         "→ Stop Running Summon\n\n"
         "/blacklist\n"
-        "→ Disable Summon In Group (Owner Only)\n\n"
+        "→ Disable Summon In Group\n\n"
         "/whitelist\n"
-        "→ Enable Summon In Group (Owner Only)\n\n"
+        "→ Enable Summon In Group\n\n"
         "/ping\n"
         "→ Check Userbot"
     )
