@@ -1,6 +1,0 @@
-telethon
-openai
-motor
-pymongo
-dnspython
-cryptg
