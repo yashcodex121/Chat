@@ -123,9 +123,9 @@ async def whitelist(_, message: Message):
     )
 
 
-# ---------------- TAG ALL ---------------- #
+# ---------------- ALL TAG ---------------- #
 
-@app.on_message(filters.command("tagall", prefixes=["/", ".", "!"]) & filters.group)
+@app.on_message(filters.command("all", prefixes=["/", ".", "!"]) & filters.group)
 @owner_only
 async def tag_all(_, message: Message):
 
@@ -133,16 +133,14 @@ async def tag_all(_, message: Message):
 
         chat_id = message.chat.id
 
-        # -------- BLACKLIST CHECK -------- #
-
+        # blacklist check
         if chat_id in blacklist_groups:
 
             return await message.reply_text(
                 "🚫 This Group Is Blacklisted"
             )
 
-        # -------- COOLDOWN -------- #
-
+        # cooldown
         if chat_id in tag_cooldown:
 
             remaining = tag_cooldown[chat_id] - asyncio.get_event_loop().time()
@@ -154,31 +152,43 @@ async def tag_all(_, message: Message):
                     f"⏳ Wait {int(remaining)} sec"
                 )
 
-        # 60 sec cooldown
+        # cooldown time
         tag_cooldown[chat_id] = asyncio.get_event_loop().time() + 60
 
-        # ------------------------- #
-
+        # command message
         if len(message.command) < 2:
 
             return await message.reply_text(
-                "❌ Example:\n/tagall hello everyone"
+                "❌ Example:\n/all hello everyone"
             )
 
         text = message.text.split(None, 1)[1]
 
         await send_log(
-            f"📢 TAGALL USED\n\n"
+            f"📢 ALL TAG USED\n\n"
             f"👤 User : {message.from_user.mention}\n"
             f"💬 Chat : {message.chat.title}\n"
             f"📝 Message : {text}"
         )
 
-        members = []
+        active_tags[chat_id] = True
+
+        tagged = 0
+
+        progress = await message.reply_text(
+            "🚀 Tagging Started..."
+        )
 
         unique_users = set()
 
         async for member in app.get_chat_members(chat_id):
+
+            # stop check
+            if not active_tags.get(chat_id):
+
+                return await progress.edit_text(
+                    "🛑 Tagging Cancelled"
+                )
 
             user = member.user
 
@@ -190,82 +200,48 @@ async def tag_all(_, message: Message):
 
             unique_users.add(user.id)
 
-            members.append(user)
-
-        active_tags[chat_id] = True
-
-        count = 0
-        mention_text = ""
-        tagged = 0
-
-        progress_msg = await message.reply_text(
-            "🚀 Tagging Started..."
-        )
-
-        for user in members:
-
-            # -------- STOP CHECK -------- #
-
-            if not active_tags.get(chat_id):
-
-                return await progress_msg.edit_text(
-                    "🛑 Tagging Cancelled"
-                )
-
-            # ---------------------------- #
-
-            mention_text += (
-                f"[{user.first_name}]"
-                f"(tg://user?id={user.id}) "
-            )
-
-            count += 1
-            tagged += 1
-
-            # 5 users per message
-            if count == 5:
+            try:
 
                 await message.reply_text(
-                    f"{mention_text}\n\n{text}"
+                    f"[{user.first_name}](tg://user?id={user.id}) {text}"
                 )
 
-                await asyncio.sleep(3)
-
-                count = 0
-                mention_text = ""
+                tagged += 1
 
                 # progress update
-                try:
-                    await progress_msg.edit_text(
-                        f"🚀 Tagging Running...\n\n"
-                        f"✅ Tagged : {tagged}"
-                    )
-                except:
-                    pass
+                if tagged % 10 == 0:
 
-        if mention_text:
+                    try:
+                        await progress.edit_text(
+                            f"🚀 Tagging Running...\n\n"
+                            f"✅ Tagged : {tagged}"
+                        )
+                    except:
+                        pass
 
-            await message.reply_text(
-                f"{mention_text}\n\n{text}"
-            )
+                # anti flood
+                await asyncio.sleep(3)
 
-        await progress_msg.edit_text(
+            except FloodWait as e:
+
+                await asyncio.sleep(e.value)
+
+            except Exception:
+                continue
+
+        await progress.edit_text(
             f"✅ Tagging Completed\n\n"
             f"👥 Total Tagged : {tagged}"
         )
 
         active_tags[chat_id] = False
 
-    except FloodWait as e:
-
-        await asyncio.sleep(e.value)
-
     except Exception:
 
         error = traceback.format_exc()
 
         await send_log(
-            f"❌ TAGALL ERROR\n\n"
+            f"❌ ALL TAG ERROR\n\n"
             f"{error}"
         )
 
@@ -297,14 +273,19 @@ async def admins(_, message: Message):
             f"📝 Message : {text}"
         )
 
-        mention_text = ""
-
         unique_admins = set()
+
+        active_tags[message.chat.id] = True
+
+        tagged = 0
 
         async for admin in app.get_chat_members(
             message.chat.id,
             filter="administrators"
         ):
+
+            if not active_tags.get(message.chat.id):
+                break
 
             user = admin.user
 
@@ -316,14 +297,29 @@ async def admins(_, message: Message):
 
             unique_admins.add(user.id)
 
-            mention_text += (
-                f"[{user.first_name}]"
-                f"(tg://user?id={user.id}) "
-            )
+            try:
+
+                await message.reply_text(
+                    f"[{user.first_name}](tg://user?id={user.id}) {text}"
+                )
+
+                tagged += 1
+
+                await asyncio.sleep(3)
+
+            except FloodWait as e:
+
+                await asyncio.sleep(e.value)
+
+            except Exception:
+                continue
 
         await message.reply_text(
-            f"{mention_text}\n\n{text}"
+            f"✅ Admin Tag Completed\n\n"
+            f"👮 Tagged : {tagged}"
         )
+
+        active_tags[message.chat.id] = False
 
     except Exception:
 
@@ -347,10 +343,10 @@ async def help_command(_, message: Message):
 
     await message.reply_text(
         "📚 COMMANDS\n\n"
-        "/tagall message\n"
-        "→ Tag All Members\n\n"
+        "/all message\n"
+        "→ Tag All Members One By One\n\n"
         "/admins message\n"
-        "→ Tag Admins\n\n"
+        "→ Tag Admins One By One\n\n"
         "/stoptag\n"
         "→ Stop Running Tag\n\n"
         "/blacklist\n"
