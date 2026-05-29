@@ -1,0 +1,38 @@
+{
+  "name": "Tag Userbot",
+  "description": "Telegram Userbot TagAll",
+  "logo": "https://telegram.org/img/t_logo.png",
+  "keywords": [
+    "telegram",
+    "userbot",
+    "pyrogram"
+  ],
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API HASH",
+      "required": true
+    },
+    "SESSION_STRING": {
+      "description": "Pyrogram Session String",
+      "required": true
+    },
+    "OWNER_ID": {
+      "description": "Your Telegram User ID",
+      "required": true
+    },
+    "LOG_GROUP_ID": {
+      "description": "Logs Group ID",
+      "required": true
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  }
+}
