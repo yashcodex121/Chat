@@ -196,7 +196,7 @@ async def group_chatbot(client: Client, message: Message):
     chat_id = chat.id
 
     # Check if chatbot is enabled in this group (MongoDB)
-    if chat_bot_groups:
+    if chat_bot_groups is not None:
         data = chat_bot_groups.find_one({"chat_id": chat_id, "enabled": True})
         if not data:
             return
