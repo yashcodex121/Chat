@@ -242,7 +242,7 @@ async def group_chatbot(client: Client, message: Message):
 @app.on_message(filters.command("chatbot", prefixes=["/", ".", "!"]) & filters.group)
 async def chatbot_toggle(client: Client, message: Message):
     """Toggle chatbot on/off via inline buttons."""
-    if not chat_bot_groups:
+    if chat_bot_groups is None:
         return await message.reply("❌ MongoDB not configured. Chatbot toggle unavailable.")
 
     user = message.from_user
