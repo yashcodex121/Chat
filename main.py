@@ -289,7 +289,7 @@ async def main():
     print(f"✅ {BOT_NAME} Userbot Running. Waiting for messages...")
 
     # Pyrogram ka official idle — process alive + signals handle karta hai
-    from pyrogram.idle import idle
+    from pyrogram import idle
     await idle()
 
     await app.stop()
