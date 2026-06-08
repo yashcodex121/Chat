@@ -52,7 +52,7 @@ if MONGODB_URI:
 # ============================================================ #
 
 app = Client(
-    name=":memory:",
+    name="userbot",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
@@ -288,8 +288,12 @@ async def main():
     await send_log(f"✅ {BOT_NAME} Userbot Started on Heroku!")
     print(f"✅ {BOT_NAME} Userbot Running. Waiting for messages...")
 
-    # Heroku pe process alive rakhne ke liye idle loop
-    await asyncio.Event().wait()
+    # Pyrogram ka official idle — process alive + signals handle karta hai
+    from pyrogram.idle import idle
+    await idle()
+
+    await app.stop()
+    print(f"⛔ {BOT_NAME} Userbot Stopped.")
 
 
 if __name__ == "__main__":
