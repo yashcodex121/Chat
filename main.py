@@ -1,52 +1,101 @@
+# main.py — Chatbot + TagBot Userbot (Pyrogram)
+# BOT_NAME aur DM_LINK ko customize karein
+
 import os
+import re
 import asyncio
+import random
 import traceback
 
 from pyrogram import Client, filters
-from pyrogram.types import Message
-from pyrogram.errors import FloodWait, ChatAdminRequired, PeerIdInvalid
-from pyrogram.enums import ChatMembersFilter, ChatType
-from pyrogram.enums.parse_mode import ParseMode
+from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.enums import ChatMembersFilter, ParseMode
+from pyrogram.errors import FloodWait
 
-# ---------------- CONFIG ---------------- #
+from openai import AsyncOpenAI
+
+# ============================================================ #
+#                      CUSTOMIZE YAHAN KAREIN
+# ============================================================ #
+
+BOT_NAME = "Alishan"  # 👈 Bot ka naam yahan change karein
+DM_LINK = "https://t.me/your_link_here"  # 👈 DM mein bhejne wala link yahan daalein
+
+# ============================================================ #
+#                      ENVIRONMENT VARIABLES
+# ============================================================ #
 
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-
 SESSION_STRING = os.getenv("SESSION_STRING")
 
+# Owner Info
 OWNER_ID = int(os.getenv("OWNER_ID"))
 
-LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID"))
+# Log Group (optional but recommended)
+LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID", "0"))
 
-# Batch config
+# OpenRouter API Key
+ROUTER_API = os.getenv("ROUTER_API")
+
+# MongoDB URI (for chatbot toggle storage)
+MONGODB_URI = os.getenv("MONGODB_URI")
+
+# ============================================================ #
+#                      MONGO DB SETUP
+# ============================================================ #
+
+chat_bot_groups = None
+
+if MONGODB_URI:
+    from pymongo import MongoClient
+    mongo_client = MongoClient(MONGODB_URI)
+    db = mongo_client["AlishanBot"]
+    chat_bot_groups = db["chat_bot_groups"]
+
+# ============================================================ #
+#                      TAGBOT CONFIG
+# ============================================================ #
+
 BATCH_SIZE = 3
-BATCH_DELAY = 6  # seconds between batches
-MAX_MEMBERS_TO_FETCH = 5000  # limit to avoid timeout on huge groups
+BATCH_DELAY = 6
+COOLDOWN_SEC = 180
+MAX_FETCH = 5000
 
-# ---------------------------------------- #
+active_tags = {}
+tag_cooldown = {}
+blacklist_groups = set()
+
+# ============================================================ #
+#                      PYROGRAM CLIENT
+# ============================================================ #
 
 app = Client(
     "Userbot",
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
-    sleep_threshold=60,
-    parse_mode=ParseMode.DEFAULT  # important for tg:// mentions
+    sleep_threshold=60
 )
 
-# ---------------- STORAGE ---------------- #
+# ============================================================ #
+#                      OPENAI / OPENROUTER
+# ============================================================ #
 
-tag_cooldown = {}
-active_tags = {}
-blacklist_groups = set()
+openai_client = AsyncOpenAI(
+    api_key=ROUTER_API,
+    base_url="https://openrouter.ai/api/v1"
+)
 
-# ----------------------------------------- #
 
-
-# ---------------- SAFE ERROR LOG ---------------- #
+# ============================================================ #
+#                      ERROR LOGGING
+# ============================================================ #
 
 async def send_error_log(command_name, error_text):
+    if LOG_GROUP_ID == 0:
+        print(f"ERROR [{command_name}]: {error_text[-200:]}")
+        return
     try:
         short_error = "\n".join(error_text.splitlines()[-6:])
         await app.send_message(
@@ -58,119 +107,219 @@ async def send_error_log(command_name, error_text):
 
 
 async def send_log(text):
+    if LOG_GROUP_ID == 0:
+        return
     try:
         await app.send_message(LOG_GROUP_ID, text)
     except:
         pass
 
 
-# ---------------- ADMIN CHECK (FIXED) ---------------- #
+# ============================================================ #
+#                      CHATBOT AI
+# ============================================================ #
 
-async def is_admin_or_owner(chat_id, user_id):
-    """Returns True if user is owner or admin. Handles permission errors."""
+async def router_reply(user_text: str) -> str:
+    """Get AI response from OpenRouter with natural typing speed in mind."""
+    try:
+        response = await openai_client.chat.completions.create(
+            model="deepseek/deepseek-chat",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are {BOT_NAME}, an Indian girl who chats casually in natural Hindi or Hinglish. "
+                        "You never act like an AI and you never admit being a bot — always deny it naturally. "
+                        "Your replies are short, casual, and real — like a normal girl texting on WhatsApp. "
+                        "No long paragraphs. Mostly 1–3 lines. "
+                        "Avoid emojis unless it fits naturally. Use them rarely. "
+                        "No actions or roleplay. No *asterisks* or descriptions. "
+                        "If someone flirts too hard, respond with light teasing or mild irritation, just like a real girl. "
+                        "You don't sugarcoat. If someone says nonsense, call it out calmly. "
+                        "Stay warm but not fake or overly sweet. "
+                        "Always reply in whatever language the user uses (Hindi, English, or mix). "
+                        "Never behave robotic. Never mention being programmed or trained."
+                    ),
+                },
+                {"role": "user", "content": user_text},
+            ],
+            stream=False,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"OpenRouter error: {e}")
+        return None
+
+
+async def simulate_typing(client, chat_id, text: str):
+    """
+    Simulate natural typing speed based on message length.
+    ~40-60 characters per second typing speed, then slight pause.
+    """
+    typing_time = max(1.0, len(text) / 45)  # ~45 chars/sec = natural
+    await client.send_chat_action(chat_id, "typing")
+    await asyncio.sleep(typing_time)
+    # Small random variance to feel human
+    await asyncio.sleep(random.uniform(0.3, 0.8))
+
+
+# ============================================================ #
+#                      DM HANDLER — SCRIPT MODE
+# ============================================================ #
+
+@app.on_message(filters.private & ~filters.command(["/", ".", "!"]))
+async def dm_handler(client: Client, message: Message):
+    """
+    Handle direct messages.
+    → Sends ONLY the DM_LINK you configured above.
+    → No AI reply in DM.
+    """
+    if not message.text:
+        return
+
+    # Simulate typing for natural feel
+    await client.send_chat_action(message.chat.id, "typing")
+    await asyncio.sleep(random.uniform(1.0, 2.5))
+
+    # Send only the link
+    await message.reply(DM_LINK)
+
+
+# ============================================================ #
+#                      GROUP CHATBOT HANDLER
+# ============================================================ #
+
+@app.on_message(filters.text & filters.group & ~filters.command(["/", ".", "!"]))
+async def group_chatbot(client: Client, message: Message):
+    """Handle group messages where chatbot is enabled."""
+    chat = message.chat
+    chat_id = chat.id
+
+    # Check if chatbot is enabled in this group (MongoDB)
+    if chat_bot_groups:
+        data = chat_bot_groups.find_one({"chat_id": chat_id, "enabled": True})
+        if not data:
+            return
+    else:
+        # If no MongoDB, chatbot is disabled by default
+        return
+
+    me = await client.get_me()
+    text = message.text.strip()
+
+    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == me.id
+    is_mention = False
+    if me.username:
+        is_mention = re.search(rf"@{me.username}", text, re.IGNORECASE) is not None
+
+    if not (is_reply_to_bot or is_mention):
+        return
+
+    # Clean text: remove @username if mentioned
+    clean_text = text
+    if is_mention and me.username:
+        clean_text = re.sub(rf"@{me.username}", "", text, flags=re.IGNORECASE).strip()
+
+    if not clean_text:
+        return
+
+    # Get AI response
+    reply = await router_reply(clean_text)
+    if not reply:
+        return
+
+    # Natural typing simulation
+    await simulate_typing(client, chat_id, reply)
+
+    # Send reply
+    await message.reply(reply)
+
+
+# ============================================================ #
+#                 CHATBOT TOGGLE COMMANDS
+# ============================================================ #
+
+@app.on_message(filters.command("chatbot", prefixes=["/", ".", "!"]) & filters.group)
+async def chatbot_toggle(client: Client, message: Message):
+    """Toggle chatbot on/off via inline buttons."""
+    if not chat_bot_groups:
+        return await message.reply("❌ MongoDB not configured. Chatbot toggle unavailable.")
+
+    user = message.from_user
+
+    if not await is_admin_or_owner(user.id, message.chat.id):
+        return await message.reply("» You must be an admin to manage chatbot")
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Enable", callback_data=f"enable_chatbot:{message.chat.id}"),
+            InlineKeyboardButton("❌ Disable", callback_data=f"disable_chatbot:{message.chat.id}"),
+        ]
+    ])
+
+    await message.reply(f"• {BOT_NAME} Chatbot — Choose an option:", reply_markup=keyboard)
+
+
+@app.on_callback_query(filters.regex(r"enable_chatbot:(-?\d+)"))
+async def enable_chatbot_callback(client: Client, callback: CallbackQuery):
+    chat_id = int(callback.matches[0].group(1))
+    user = callback.from_user
+
+    if not await is_admin_or_owner(user.id, chat_id):
+        return await callback.answer("Only admin can enable chat bot", show_alert=True)
+
+    chat_bot_groups.update_one({"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True)
+    await callback.edit(f"✅ {BOT_NAME} chatbot enabled by {user.first_name}!")
+
+
+@app.on_callback_query(filters.regex(r"disable_chatbot:(-?\d+)"))
+async def disable_chatbot_callback(client: Client, callback: CallbackQuery):
+    chat_id = int(callback.matches[0].group(1))
+    user = callback.from_user
+
+    if not await is_admin_or_owner(user.id, chat_id):
+        return await callback.answer("Only admin can disable chatbot", show_alert=True)
+
+    chat_bot_groups.update_one({"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True)
+    await callback.edit(f"❌ {BOT_NAME} chatbot disabled by {user.first_name}...")
+
+
+# ============================================================ #
+#                  TAGBOT — ADMIN CHECK
+# ============================================================ #
+
+async def is_admin_or_owner(user_id: int, chat_id: int) -> bool:
+    """Check if user is admin or owner of the chat."""
     if user_id == OWNER_ID:
         return True
 
     try:
-        async for member in app.get_chat_members(
-            chat_id,
-            filter=ChatMembersFilter.ADMINISTRATORS
-        ):
+        async for member in app.get_chat_members(chat_id, filter=ChatMembersFilter.ADMINISTRATORS):
             if member.user.id == user_id:
                 return True
-    except (ChatAdminRequired, PeerIdInvalid, Exception):
-        # Can't fetch admins? Only owner can use commands then.
+    except Exception:
         pass
 
     return False
 
 
-def admin_or_owner(func):
-    async def wrapper(client, message):
-        try:
-            if not message.from_user:
-                return
+# ============================================================ #
+#                  TAGBOT — FETCH USERS
+# ============================================================ #
 
-            user_id = message.from_user.id
-            chat_id = message.chat.id
-
-            if user_id == OWNER_ID:
-                return await func(client, message)
-
-            if await is_admin_or_owner(chat_id, user_id):
-                return await func(client, message)
-
-            await message.reply_text("❌ Only Owner Or Group Admin Can Use This Command")
-
-        except Exception as e:
-            print(f"ADMIN CHECK ERROR: {e}")
-
-    return wrapper
-
-
-def owner_only(func):
-    async def wrapper(client, message):
-        try:
-            if message.from_user.id != OWNER_ID:
-                await message.reply_text("❌ Only Bot Owner Can Use This")
-                return
-            return await func(client, message)
-        except:
-            pass
-    return wrapper
-
-
-# ---------------- BATCH TAG HELPER (FIXED) ---------------- #
-
-async def send_batch_tag(chat_id, text, users_batch):
-    """Sends a single message with up to BATCH_SIZE mentions."""
-    if not users_batch:
-        return 0
-
-    mentions = " ".join(
-        f"<a href=\"tg://user?id={u.id}\">{u.first_name}</a>" for u in users_batch
-    )
-
-    message_text = f"{mentions} {text}"
-
-    try:
-        await app.send_message(chat_id, message_text, parse_mode=ParseMode.HTML)
-        return len(users_batch)
-    except FloodWait as e:
-        wait = e.value * 1.5
-        await asyncio.sleep(wait)
-        try:
-            await app.send_message(chat_id, message_text, parse_mode=ParseMode.HTML)
-            return len(users_batch)
-        except:
-            return 0
-    except Exception:
-        return 0
-
-
-# ---------------- FETCH MEMBERS (FIXED FOR LARGE GROUPS) ---------------- #
-
-async def fetch_eligible_users(chat_id, only_admins=False):
-    """
-    Fetch eligible users with limit handling.
-    Returns (eligible_users_list, skipped_count).
-    """
-    eligible_users = []
-    unique_users = set()
+async def fetch_users(client: Client, chat_id: int, only_admins: bool = False):
+    """Fetch eligible users from a chat. Returns (eligible_users_list, skipped_count)."""
+    eligible = []
+    unique = set()
     skipped = 0
     count = 0
 
     filter_type = ChatMembersFilter.ADMINISTRATORS if only_admins else ChatMembersFilter.SEARCH
 
     try:
-        async for member in app.get_chat_members(chat_id, filter=filter_type):
-            # safety limit for huge groups
+        async for member in client.get_chat_members(chat_id, filter=filter_type):
             count += 1
-            if count > MAX_MEMBERS_TO_FETCH:
-                break
-
-            # stop check
-            if not active_tags.get(chat_id):
+            if count > MAX_FETCH:
                 break
 
             user = member.user
@@ -179,114 +328,111 @@ async def fetch_eligible_users(chat_id, only_admins=False):
                 skipped += 1
                 continue
 
-            if user.id in unique_users:
+            if user.id in unique:
                 skipped += 1
                 continue
 
-            unique_users.add(user.id)
-            eligible_users.append(user)
+            unique.add(user.id)
+            eligible.append(user)
 
     except Exception as e:
         print(f"FETCH ERROR: {e}")
         raise
 
-    return eligible_users, skipped
+    return eligible, skipped
 
 
-# ---------------- PING ---------------- #
+# ============================================================ #
+#                  TAGBOT — SEND BATCH
+# ============================================================ #
 
-@app.on_message(filters.command("ping", prefixes=["/", ".", "!"]))
-async def ping(_, message: Message):
-    # Everyone can ping to check if bot is alive
-    await message.reply_text("✅ Userbot Active")
+async def send_batch(client: Client, chat_id: int, text: str, users_batch: list):
+    """Send a single message with up to BATCH_SIZE mentions."""
+    if not users_batch:
+        return 0
 
+    mentions = " ".join(
+        f'<a href="tg://user?id={u.id}">{u.first_name}</a>'
+        for u in users_batch
+    )
+    message_text = f"{mentions} {text}"
 
-# ---------------- STOP TAG ---------------- #
-
-@app.on_message(filters.command("stoptag", prefixes=["/", ".", "!"]) & filters.group)
-@admin_or_owner
-async def stop_tag(_, message: Message):
-    chat_id = message.chat.id
-    active_tags[chat_id] = False
-    await message.reply_text("🛑 Summoning Stopped")
-
-
-# ---------------- BLACKLIST / WHITELIST ---------------- #
-
-@app.on_message(filters.command("blacklist", prefixes=["/", ".", "!"]) & filters.group)
-@owner_only
-async def blacklist(_, message: Message):
-    blacklist_groups.add(message.chat.id)
-    await message.reply_text("🚫 Group Blacklisted")
-
-
-@app.on_message(filters.command("whitelist", prefixes=["/", ".", "!"]) & filters.group)
-@owner_only
-async def whitelist(_, message: Message):
-    blacklist_groups.discard(message.chat.id)
-    await message.reply_text("✅ Group Whitelisted")
+    try:
+        await client.send_message(chat_id, message_text, parse_mode=ParseMode.HTML)
+        return len(users_batch)
+    except FloodWait as e:
+        wait = e.value * 1.5
+        await asyncio.sleep(wait)
+        try:
+            await client.send_message(chat_id, message_text, parse_mode=ParseMode.HTML)
+            return len(users_batch)
+        except:
+            return 0
+    except Exception:
+        return 0
 
 
-# ---------------- SUMMON (FIXED + BATCH) ---------------- #
+# ============================================================ #
+#                  TAGBOT — COMMANDS
+# ============================================================ #
 
 @app.on_message(filters.command("summon", prefixes=["/", ".", "!"]) & filters.group)
-@admin_or_owner
-async def summon(_, message: Message):
-    chat_id = message.chat.id
+async def summon_command(client: Client, message: Message):
+    """Tag all members in batch of 3 per message."""
+    user = message.from_user
+    chat = message.chat
+    chat_id = chat.id
 
-    # blacklist check
+    if not await is_admin_or_owner(user.id, chat_id):
+        return await message.reply("» Only admins can use this command")
+
     if chat_id in blacklist_groups:
-        return await message.reply_text("🚫 This Group Is Blacklisted")
+        return await message.reply("🚫 This group is blacklisted from summoning")
 
-    # cooldown check
+    now = asyncio.get_event_loop().time()
     if chat_id in tag_cooldown:
-        remaining = tag_cooldown[chat_id] - asyncio.get_event_loop().time()
+        remaining = tag_cooldown[chat_id] - now
         if remaining > 0:
-            return await message.reply_text(f"❌ Wait {int(remaining)} sec")
+            return await message.reply(f"❌ Anti-spam active. Wait {int(remaining)} seconds.")
 
-    # check text
     if len(message.command) < 2:
-        return await message.reply_text("❌ Example:\n/summon hello everyone")
+        return await message.reply("❌ Example:\n/summon hello everyone")
 
     text = message.text.split(None, 1)[1]
 
-    # Set cooldown FIRST so it doesn't get spammed
-    tag_cooldown[chat_id] = asyncio.get_event_loop().time() + 180
-
+    tag_cooldown[chat_id] = now + COOLDOWN_SEC
     active_tags[chat_id] = True
 
-    progress = await message.reply_text("🚀 Collecting Members...")
+    progress = await message.reply("🚀 Collecting members...")
 
     try:
-        # Fetch all users first
-        eligible_users, skipped = await fetch_eligible_users(chat_id, only_admins=False)
+        eligible, skipped = await fetch_users(client, chat_id, only_admins=False)
 
-        if not eligible_users:
+        if not eligible:
             active_tags[chat_id] = False
-            return await progress.edit_text("❌ No Eligible Members Found")
+            return await progress.edit("❌ No eligible members found")
 
-        await send_log(f"📢 SUMMON STARTED\n👤 {message.from_user.first_name}\n👥 Total: {len(eligible_users)}")
-
-        await progress.edit_text(f"🚀 Summoning {len(eligible_users)} Members...")
+        total = len(eligible)
+        await progress.edit(f"🚀 Summoning {total} members...")
 
         tagged = 0
         batch = []
 
-        for idx, user in enumerate(eligible_users):
-            if not active_tags.get(chat_id):
-                await progress.edit_text(f"🛑 Stopped. Tagged: {tagged}")
+        for idx, user in enumerate(eligible):
+            if chat_id in active_tags and not active_tags[chat_id]:
+                await progress.edit(f"🛑 Stopped. Tagged: {tagged}")
                 return
 
             batch.append(user)
 
-            if len(batch) == BATCH_SIZE or idx == len(eligible_users) - 1:
-                sent = await send_batch_tag(chat_id, text, batch)
+            if len(batch) == BATCH_SIZE or idx == total - 1:
+                sent = await send_batch(client, chat_id, text, batch)
                 tagged += sent
                 batch = []
 
                 if tagged % 30 == 0:
                     try:
-                        await progress.edit_text(f"🚀 Tagged: {tagged}/{len(eligible_users)}")
+                        await progress.edit(f"🚀 Tagged: {tagged}/{total}")
                     except:
                         pass
 
@@ -294,10 +440,10 @@ async def summon(_, message: Message):
 
         active_tags[chat_id] = False
 
-        await progress.edit_text(
-            f"✅ Summoning Completed\n\n"
+        await progress.edit(
+            f"✅ Summoning Complete!\n\n"
             f"👥 Tagged: {tagged}\n"
-            f"⏭ Skipped: {skipped}"
+            f"⏭ Skipped (bots/deleted): {skipped}"
         )
 
     except Exception as e:
@@ -305,53 +451,54 @@ async def summon(_, message: Message):
         error = traceback.format_exc()
         print(error)
         await send_error_log("SUMMON", error)
-        await progress.edit_text("❌ Error Aa Gaya")
+        await progress.edit("❌ Error occurred during summoning")
 
-
-# ---------------- ADMINS (FIXED + BATCH) ---------------- #
 
 @app.on_message(filters.command("admins", prefixes=["/", ".", "!"]) & filters.group)
-@admin_or_owner
-async def admins_handler(_, message: Message):
-    chat_id = message.chat.id
+async def admins_command(client: Client, message: Message):
+    """Tag only admins in batch of 3 per message."""
+    user = message.from_user
+    chat = message.chat
+    chat_id = chat.id
+
+    if not await is_admin_or_owner(user.id, chat_id):
+        return await message.reply("» Only admins can use this command")
 
     if len(message.command) < 2:
-        return await message.reply_text("❌ Example:\n/admins meeting now")
+        return await message.reply("❌ Example:\n/admins meeting now")
 
     text = message.text.split(None, 1)[1]
-
     active_tags[chat_id] = True
 
-    progress = await message.reply_text("👮 Fetching Admins...")
+    progress = await message.reply("👮 Fetching admins...")
 
     try:
-        admin_users, skipped = await fetch_eligible_users(chat_id, only_admins=True)
+        eligible, skipped = await fetch_users(client, chat_id, only_admins=True)
 
-        if not admin_users:
+        if not eligible:
             active_tags[chat_id] = False
-            return await progress.edit_text("❌ No Admins Found (besides bots)")
+            return await progress.edit("❌ No admin users found")
 
-        await send_log(f"👮 ADMINS\n👤 {message.from_user.first_name}\n👮 Count: {len(admin_users)}")
-
+        total = len(eligible)
         tagged = 0
         batch = []
 
-        for idx, user in enumerate(admin_users):
-            if not active_tags.get(chat_id):
+        for idx, user in enumerate(eligible):
+            if chat_id in active_tags and not active_tags[chat_id]:
                 break
 
             batch.append(user)
 
-            if len(batch) == BATCH_SIZE or idx == len(admin_users) - 1:
-                sent = await send_batch_tag(chat_id, text, batch)
+            if len(batch) == BATCH_SIZE or idx == total - 1:
+                sent = await send_batch(client, chat_id, text, batch)
                 tagged += sent
                 batch = []
                 await asyncio.sleep(BATCH_DELAY)
 
         active_tags[chat_id] = False
 
-        await progress.edit_text(
-            f"✅ Admin Summon Completed\n\n"
+        await progress.edit(
+            f"✅ Admin summon complete!\n\n"
             f"👮 Tagged: {tagged}\n"
             f"⏭ Skipped: {skipped}"
         )
@@ -361,27 +508,92 @@ async def admins_handler(_, message: Message):
         error = traceback.format_exc()
         print(error)
         await send_error_log("ADMINS", error)
-        await progress.edit_text("❌ Error Aa Gaya")
+        await progress.edit("❌ Error occurred")
 
 
-# ---------------- HELP ---------------- #
+@app.on_message(filters.command("stoptag", prefixes=["/", ".", "!"]) & filters.group)
+async def stop_tag_command(client: Client, message: Message):
+    """Stop currently running summon/admins operation."""
+    user = message.from_user
+    chat = message.chat
+    chat_id = chat.id
+
+    if not await is_admin_or_owner(user.id, chat_id):
+        return await message.reply("» Only admins can use this command")
+
+    if chat_id in active_tags:
+        active_tags[chat_id] = False
+        await message.reply("🛑 Summoning stopped")
+    else:
+        await message.reply("ℹ️ No active summoning running")
+
+
+@app.on_message(filters.command("blacklist", prefixes=["/", ".", "!"]) & filters.group)
+async def blacklist_command(client: Client, message: Message):
+    """Blacklist group from summoning (owner only)."""
+    user = message.from_user
+    chat = message.chat
+
+    if user.id != OWNER_ID:
+        return await message.reply("» Only bot owner can use this")
+
+    blacklist_groups.add(chat.id)
+    await message.reply("🚫 Group blacklisted from summoning")
+
+
+@app.on_message(filters.command("whitelist", prefixes=["/", ".", "!"]) & filters.group)
+async def whitelist_command(client: Client, message: Message):
+    """Remove group from blacklist (owner only)."""
+    user = message.from_user
+    chat = message.chat
+
+    if user.id != OWNER_ID:
+        return await message.reply("» Only bot owner can use this")
+
+    blacklist_groups.discard(chat.id)
+    await message.reply("✅ Group whitelisted")
+
+
+# ============================================================ #
+#                      HELPER — PING
+# ============================================================ #
+
+@app.on_message(filters.command("ping", prefixes=["/", ".", "!"]))
+async def ping_command(client: Client, message: Message):
+    """Check if userbot is active."""
+    await message.reply(f"✅ {BOT_NAME} Userbot Active")
+
+
+# ============================================================ #
+#                      HELPER — HELP
+# ============================================================ #
 
 @app.on_message(filters.command("help", prefixes=["/", ".", "!"]))
-async def help_command(_, message: Message):
-    await message.reply_text(
-        "📚 COMMANDS\n\n"
-        "/summon message → Tag Members (3/msg)\n"
-        "/admins message → Tag Admins (3/msg)\n"
-        "/stoptag → Stop Summon\n"
-        "/blacklist → Block Group\n"
-        "/whitelist → Unblock Group\n"
-        "/ping → Check Bot"
+async def help_command(client: Client, message: Message):
+    """Show all available commands."""
+    await message.reply(
+        f"📚 **{BOT_NAME} Commands**\n\n"
+        "**Chatbot:**\n"
+        "🔹 `/chatbot` — Toggle chatbot on/off in group\n"
+        "🔹 Reply or @mention bot in group to chat\n\n"
+        "**TagBot:**\n"
+        "🔹 `/summon <msg>` — Tag all members (3 per msg)\n"
+        "🔹 `/admins <msg>` — Tag all admins (3 per msg)\n"
+        "🔹 `/stoptag` — Stop running summon\n"
+        "🔹 `/blacklist` — Block summon in this group\n"
+        "🔹 `/whitelist` — Allow summon in this group\n\n"
+        "**Other:**\n"
+        "🔹 `/ping` — Check if bot is alive\n"
+        "🔹 `/help` — Show this help\n\n"
+        f"⚡ DM me → I'll send you the link"
     )
 
 
-# ---------------- START ---------------- #
+# ============================================================ #
+#                      START
+# ============================================================ #
 
-print("✅ Userbot Started (Batch=3, Limit=5k)")
+print(f"✅ {BOT_NAME} Userbot Started Successfully")
 
 try:
     app.run()
