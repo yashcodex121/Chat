@@ -1,5 +1,5 @@
 # main.py — Chatbot + TagBot Userbot (Pyrogram)
-# Heroku Compatible
+# Heroku Compatible — Client inside main(), correct prefixes
 
 import os
 import re
@@ -94,11 +94,20 @@ async def simulate_typing(client, chat_id, text: str):
     await asyncio.sleep(random.uniform(0.3, 0.8))
 
 # ============================================================ #
+#                      COMMAND FILTER HELPER
+# FIX: Pyrogram 2.0.106 mein prefixes string honi chahiye, list nahi
+#      "/!." ek string hai — teen prefix ek saath
+# ============================================================ #
+
+def cmd(command):
+    return filters.command(command, prefixes="/!.")
+
+# ============================================================ #
 #                      MAIN
 # ============================================================ #
 
 async def main():
-    # FIX: Client yahan banao — same event loop mein
+    # FIX: Client same event loop mein banana zaroori hai
     app = Client(
         name="userbot",
         api_id=API_ID,
@@ -107,7 +116,7 @@ async def main():
         sleep_threshold=60,
     )
 
-    # ── Error / Log helpers ───────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────
 
     async def send_error_log(command_name: str, error_text: str):
         if LOG_GROUP_ID == 0:
@@ -127,19 +136,19 @@ async def main():
         except Exception:
             pass
 
-    # ── All commands list ─────────────────────────────────────
-
-    ALL_CMDS = ["start", "help", "ping", "chatbot", "summon",
-                "admins", "stoptag", "blacklist", "whitelist"]
+    # ── DEBUG: Har message log karo ────────────────────────
+    @app.on_message()
+    async def debug_all(client, message: Message):
+        print(f"📨 MSG | chat={message.chat.id} | from={message.from_user.id if message.from_user else None} | text={message.text!r}")
 
     # ── DM Handler ───────────────────────────────────────────
 
-    @app.on_message(
-        filters.private
-        & ~filters.command(ALL_CMDS, prefixes=["/", ".", "!"])
-    )
+    @app.on_message(filters.private & ~filters.me)
     async def dm_handler(client, message: Message):
         if not message.text:
+            return
+        # Commands ko ignore karo
+        if message.text.startswith(("/", "!", ".")):
             return
         await client.send_chat_action(message.chat.id, ChatAction.TYPING)
         await asyncio.sleep(random.uniform(1.0, 2.5))
@@ -147,12 +156,14 @@ async def main():
 
     # ── Group Chatbot Handler ─────────────────────────────────
 
-    @app.on_message(
-        filters.text
-        & filters.group
-        & ~filters.command(ALL_CMDS, prefixes=["/", ".", "!"])
-    )
+    @app.on_message(filters.text & filters.group & ~filters.me)
     async def group_chatbot(client, message: Message):
+        if not message.text:
+            return
+        # Commands ignore karo
+        if message.text.startswith(("/", "!", ".")):
+            return
+
         chat_id = message.chat.id
 
         if chat_bot_groups is not None:
@@ -177,10 +188,7 @@ async def main():
         if not (is_reply_to_bot or is_mention):
             return
 
-        clean_text = text
-        if is_mention and me.username:
-            clean_text = re.sub(rf"@{me.username}", "", text, flags=re.IGNORECASE).strip()
-
+        clean_text = re.sub(rf"@{me.username}", "", text, flags=re.IGNORECASE).strip() if me.username else text
         if not clean_text:
             return
 
@@ -193,9 +201,7 @@ async def main():
 
     # ── Chatbot Toggle ────────────────────────────────────────
 
-    @app.on_message(
-        filters.command("chatbot", prefixes=["/", ".", "!"]) & filters.group
-    )
+    @app.on_message(cmd("chatbot") & filters.group)
     async def chatbot_toggle(client, message: Message):
         if chat_bot_groups is None:
             return await message.reply("❌ MongoDB not configured.")
@@ -216,9 +222,10 @@ async def main():
         from tagbot import is_admin_or_owner
         if not await is_admin_or_owner(client, cb.from_user.id, chat_id, OWNER_ID):
             return await cb.answer("Only admins can do this", show_alert=True)
-        await chat_bot_groups.update_one(
-            {"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True
-        )
+        if chat_bot_groups is not None:
+            await chat_bot_groups.update_one(
+                {"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True
+            )
         await cb.message.edit_text(f"✅ {BOT_NAME} chatbot enabled by {cb.from_user.first_name}!")
 
     @app.on_callback_query(filters.regex(r"cb_off:(-?\d+)"))
@@ -227,20 +234,21 @@ async def main():
         from tagbot import is_admin_or_owner
         if not await is_admin_or_owner(client, cb.from_user.id, chat_id, OWNER_ID):
             return await cb.answer("Only admins can do this", show_alert=True)
-        await chat_bot_groups.update_one(
-            {"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True
-        )
+        if chat_bot_groups is not None:
+            await chat_bot_groups.update_one(
+                {"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True
+            )
         await cb.message.edit_text(f"❌ {BOT_NAME} chatbot disabled by {cb.from_user.first_name}...")
 
     # ── Ping ──────────────────────────────────────────────────
 
-    @app.on_message(filters.command("ping", prefixes=["/", ".", "!"]))
+    @app.on_message(cmd("ping"))
     async def ping_command(client, message: Message):
         await message.reply(f"✅ {BOT_NAME} Userbot Active")
 
     # ── Help ──────────────────────────────────────────────────
 
-    @app.on_message(filters.command("help", prefixes=["/", ".", "!"]))
+    @app.on_message(cmd("help"))
     async def help_command(client, message: Message):
         await message.reply(
             f"📚 **{BOT_NAME} Commands**\n\n"
