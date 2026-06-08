@@ -4,8 +4,9 @@ import traceback
 
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.errors import FloodWait
-from pyrogram.enums import ChatMembersFilter
+from pyrogram.errors import FloodWait, ChatAdminRequired, PeerIdInvalid
+from pyrogram.enums import ChatMembersFilter, ChatType
+from pyrogram.enums.parse_mode import ParseMode
 
 # ---------------- CONFIG ---------------- #
 
@@ -18,17 +19,10 @@ OWNER_ID = int(os.getenv("OWNER_ID"))
 
 LOG_GROUP_ID = int(os.getenv("LOG_GROUP_ID"))
 
-# How many users to tag per single message (3 as requested)
+# Batch config
 BATCH_SIZE = 3
-
-# Delay between batch sends (seconds)
-BATCH_DELAY = 5
-
-# Anti-flood sleep on FloodWait multiplier
-FLOOD_BACKOFF = 1.5
-
-# Max concurrent tagging tasks for very large groups
-MAX_CONCURRENT_BATCHES = 2
+BATCH_DELAY = 6  # seconds between batches
+MAX_MEMBERS_TO_FETCH = 5000  # limit to avoid timeout on huge groups
 
 # ---------------------------------------- #
 
@@ -37,15 +31,14 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
-    sleep_threshold=60  # auto-handle smaller FloodWaits
+    sleep_threshold=60,
+    parse_mode=ParseMode.DEFAULT  # important for tg:// mentions
 )
 
 # ---------------- STORAGE ---------------- #
 
 tag_cooldown = {}
-
 active_tags = {}
-
 blacklist_groups = set()
 
 # ----------------------------------------- #
@@ -54,268 +47,134 @@ blacklist_groups = set()
 # ---------------- SAFE ERROR LOG ---------------- #
 
 async def send_error_log(command_name, error_text):
-
     try:
-
-        short_error = "\n".join(
-            error_text.splitlines()[-6:]
-        )
-
+        short_error = "\n".join(error_text.splitlines()[-6:])
         await app.send_message(
             LOG_GROUP_ID,
-            f"❌ ERROR DETECTED\n\n"
-            f"📌 Command : {command_name}\n\n"
-            f"🛠 Hint : Check Recent Changes / Permissions / Flood Limits\n\n"
-            f"📄 Error:\n"
-            f"`{short_error}`"
+            f"❌ ERROR\n📌 {command_name}\n\n`{short_error}`"
         )
-
     except Exception as e:
         print(e)
 
 
-# ---------------- SIMPLE LOG ---------------- #
-
 async def send_log(text):
-
     try:
-        await app.send_message(
-            LOG_GROUP_ID,
-            text
-        )
-
+        await app.send_message(LOG_GROUP_ID, text)
     except:
         pass
 
 
-# ---------------- OWNER + ADMIN CHECK ---------------- #
+# ---------------- ADMIN CHECK (FIXED) ---------------- #
+
+async def is_admin_or_owner(chat_id, user_id):
+    """Returns True if user is owner or admin. Handles permission errors."""
+    if user_id == OWNER_ID:
+        return True
+
+    try:
+        async for member in app.get_chat_members(
+            chat_id,
+            filter=ChatMembersFilter.ADMINISTRATORS
+        ):
+            if member.user.id == user_id:
+                return True
+    except (ChatAdminRequired, PeerIdInvalid, Exception):
+        # Can't fetch admins? Only owner can use commands then.
+        pass
+
+    return False
+
 
 def admin_or_owner(func):
-
     async def wrapper(client, message):
-
         try:
-
             if not message.from_user:
                 return
 
             user_id = message.from_user.id
             chat_id = message.chat.id
 
-            # owner access
             if user_id == OWNER_ID:
                 return await func(client, message)
 
-            admins = []
-
-            async for member in app.get_chat_members(
-                chat_id,
-                filter=ChatMembersFilter.ADMINISTRATORS
-            ):
-
-                admins.append(member.user.id)
-
-            # admin access
-            if user_id in admins:
+            if await is_admin_or_owner(chat_id, user_id):
                 return await func(client, message)
 
-            return await message.reply_text(
-                "❌ Only Owner Or Group Admin Can Use This Command"
-            )
+            await message.reply_text("❌ Only Owner Or Group Admin Can Use This Command")
 
         except Exception as e:
-
-            print(f"ADMIN CHECK ERROR : {e}")
-
-            return await message.reply_text(
-                "❌ Admin Check Failed"
-            )
+            print(f"ADMIN CHECK ERROR: {e}")
 
     return wrapper
 
-
-# ---------------- OWNER ONLY ---------------- #
 
 def owner_only(func):
-
     async def wrapper(client, message):
-
         try:
-
             if message.from_user.id != OWNER_ID:
-
-                return await message.reply_text(
-                    "❌ Only Bot Owner Can Use This"
-                )
-
+                await message.reply_text("❌ Only Bot Owner Can Use This")
+                return
             return await func(client, message)
-
         except:
-            return
-
+            pass
     return wrapper
 
 
-# ---------------- PING ---------------- #
-
-@app.on_message(filters.command("ping", prefixes=["/", ".", "!"]))
-@admin_or_owner
-async def ping(_, message: Message):
-
-    await message.reply_text(
-        "✅ Userbot Active"
-    )
-
-
-# ---------------- STOP TAG ---------------- #
-
-@app.on_message(filters.command("stoptag", prefixes=["/", ".", "!"]) & filters.group)
-@admin_or_owner
-async def stop_tag(_, message: Message):
-
-    chat_id = message.chat.id
-
-    active_tags[chat_id] = False
-
-    await message.reply_text(
-        "🛑 Summoning Stopped"
-    )
-
-
-# ---------------- BLACKLIST ---------------- #
-
-@app.on_message(filters.command("blacklist", prefixes=["/", ".", "!"]) & filters.group)
-@owner_only
-async def blacklist(_, message: Message):
-
-    blacklist_groups.add(message.chat.id)
-
-    await message.reply_text(
-        "🚫 Group Blacklisted"
-    )
-
-
-# ---------------- WHITELIST ---------------- #
-
-@app.on_message(filters.command("whitelist", prefixes=["/", ".", "!"]) & filters.group)
-@owner_only
-async def whitelist(_, message: Message):
-
-    blacklist_groups.discard(message.chat.id)
-
-    await message.reply_text(
-        "✅ Group Whitelisted"
-    )
-
-
-# ---------------- BATCH TAG HELPER ---------------- #
+# ---------------- BATCH TAG HELPER (FIXED) ---------------- #
 
 async def send_batch_tag(chat_id, text, users_batch):
-
-    """
-    Sends a single message tagging up to BATCH_SIZE users.
-    Returns the number of users actually included.
-    """
+    """Sends a single message with up to BATCH_SIZE mentions."""
     if not users_batch:
         return 0
 
-    # Build mention string for all users in this batch
-    mentions = []
-    for user in users_batch:
-        mention = f"[{user.first_name}](tg://user?id={user.id})"
-        mentions.append(mention)
+    mentions = " ".join(
+        f"<a href=\"tg://user?id={u.id}\">{u.first_name}</a>" for u in users_batch
+    )
 
-    # Join all mentions with the custom text
-    batch_message = " ".join(mentions) + f" {text}"
+    message_text = f"{mentions} {text}"
 
     try:
-        await app.send_message(chat_id, batch_message)
+        await app.send_message(chat_id, message_text, parse_mode=ParseMode.HTML)
         return len(users_batch)
-
     except FloodWait as e:
-        # Wait the required time + backoff
-        wait_time = e.value * FLOOD_BACKOFF
-        await asyncio.sleep(wait_time)
-        # Retry once after flood wait
+        wait = e.value * 1.5
+        await asyncio.sleep(wait)
         try:
-            await app.send_message(chat_id, batch_message)
+            await app.send_message(chat_id, message_text, parse_mode=ParseMode.HTML)
             return len(users_batch)
         except:
             return 0
-
     except Exception:
         return 0
 
 
-# ---------------- SUMMON (BATCH MODE) ---------------- #
+# ---------------- FETCH MEMBERS (FIXED FOR LARGE GROUPS) ---------------- #
 
-@app.on_message(filters.command("summon", prefixes=["/", ".", "!"]) & filters.group)
-@admin_or_owner
-async def summon(_, message: Message):
+async def fetch_eligible_users(chat_id, only_admins=False):
+    """
+    Fetch eligible users with limit handling.
+    Returns (eligible_users_list, skipped_count).
+    """
+    eligible_users = []
+    unique_users = set()
+    skipped = 0
+    count = 0
+
+    filter_type = ChatMembersFilter.ADMINISTRATORS if only_admins else ChatMembersFilter.SEARCH
 
     try:
+        async for member in app.get_chat_members(chat_id, filter=filter_type):
+            # safety limit for huge groups
+            count += 1
+            if count > MAX_MEMBERS_TO_FETCH:
+                break
 
-        chat_id = message.chat.id
-
-        # blacklist check
-        if chat_id in blacklist_groups:
-
-            return await message.reply_text(
-                "🚫 This Group Is Blacklisted"
-            )
-
-        # cooldown check
-        if chat_id in tag_cooldown:
-
-            remaining = tag_cooldown[chat_id] - asyncio.get_event_loop().time()
-
-            if remaining > 0:
-
-                return await message.reply_text(
-                    f"❌ Anti Spam Active\n\n"
-                    f"⏳ Wait {int(remaining)} sec"
-                )
-
-        # cooldown - 120 sec for big groups to avoid ban
-        tag_cooldown[chat_id] = asyncio.get_event_loop().time() + 120
-
-        # check text
-        if len(message.command) < 2:
-
-            return await message.reply_text(
-                "❌ Example:\n/summon hello everyone"
-            )
-
-        text = message.text.split(None, 1)[1]
-
-        await send_log(
-            f"📢 SUMMON STARTED\n"
-            f"👤 {message.from_user.first_name}"
-        )
-
-        active_tags[chat_id] = True
-
-        tagged = 0
-        skipped = 0
-
-        progress = await message.reply_text(
-            "🚀 Summoning Started..."
-        )
-
-        # Collect all eligible users first (faster than iterating with sends)
-        eligible_users = []
-        unique_users = set()
-
-        async for member in app.get_chat_members(chat_id):
-
-            # stop check during collection too
+            # stop check
             if not active_tags.get(chat_id):
-                await progress.edit_text("🛑 Summoning Cancelled During Collection")
-                return
+                break
 
             user = member.user
 
-            # skip deleted / bots / duplicates
             if user.is_deleted or user.is_bot:
                 skipped += 1
                 continue
@@ -327,196 +186,204 @@ async def summon(_, message: Message):
             unique_users.add(user.id)
             eligible_users.append(user)
 
-        # Now batch tag
+    except Exception as e:
+        print(f"FETCH ERROR: {e}")
+        raise
+
+    return eligible_users, skipped
+
+
+# ---------------- PING ---------------- #
+
+@app.on_message(filters.command("ping", prefixes=["/", ".", "!"]))
+async def ping(_, message: Message):
+    # Everyone can ping to check if bot is alive
+    await message.reply_text("✅ Userbot Active")
+
+
+# ---------------- STOP TAG ---------------- #
+
+@app.on_message(filters.command("stoptag", prefixes=["/", ".", "!"]) & filters.group)
+@admin_or_owner
+async def stop_tag(_, message: Message):
+    chat_id = message.chat.id
+    active_tags[chat_id] = False
+    await message.reply_text("🛑 Summoning Stopped")
+
+
+# ---------------- BLACKLIST / WHITELIST ---------------- #
+
+@app.on_message(filters.command("blacklist", prefixes=["/", ".", "!"]) & filters.group)
+@owner_only
+async def blacklist(_, message: Message):
+    blacklist_groups.add(message.chat.id)
+    await message.reply_text("🚫 Group Blacklisted")
+
+
+@app.on_message(filters.command("whitelist", prefixes=["/", ".", "!"]) & filters.group)
+@owner_only
+async def whitelist(_, message: Message):
+    blacklist_groups.discard(message.chat.id)
+    await message.reply_text("✅ Group Whitelisted")
+
+
+# ---------------- SUMMON (FIXED + BATCH) ---------------- #
+
+@app.on_message(filters.command("summon", prefixes=["/", ".", "!"]) & filters.group)
+@admin_or_owner
+async def summon(_, message: Message):
+    chat_id = message.chat.id
+
+    # blacklist check
+    if chat_id in blacklist_groups:
+        return await message.reply_text("🚫 This Group Is Blacklisted")
+
+    # cooldown check
+    if chat_id in tag_cooldown:
+        remaining = tag_cooldown[chat_id] - asyncio.get_event_loop().time()
+        if remaining > 0:
+            return await message.reply_text(f"❌ Wait {int(remaining)} sec")
+
+    # check text
+    if len(message.command) < 2:
+        return await message.reply_text("❌ Example:\n/summon hello everyone")
+
+    text = message.text.split(None, 1)[1]
+
+    # Set cooldown FIRST so it doesn't get spammed
+    tag_cooldown[chat_id] = asyncio.get_event_loop().time() + 180
+
+    active_tags[chat_id] = True
+
+    progress = await message.reply_text("🚀 Collecting Members...")
+
+    try:
+        # Fetch all users first
+        eligible_users, skipped = await fetch_eligible_users(chat_id, only_admins=False)
+
+        if not eligible_users:
+            active_tags[chat_id] = False
+            return await progress.edit_text("❌ No Eligible Members Found")
+
+        await send_log(f"📢 SUMMON STARTED\n👤 {message.from_user.first_name}\n👥 Total: {len(eligible_users)}")
+
+        await progress.edit_text(f"🚀 Summoning {len(eligible_users)} Members...")
+
+        tagged = 0
         batch = []
 
         for idx, user in enumerate(eligible_users):
-
-            # stop check
             if not active_tags.get(chat_id):
-                await progress.edit_text(
-                    f"🛑 Summoning Cancelled\n\n"
-                    f"✅ Tagged Before Stop : {tagged}"
-                )
+                await progress.edit_text(f"🛑 Stopped. Tagged: {tagged}")
                 return
 
             batch.append(user)
 
-            # When batch is full OR it's the last user, send
-            if len(batch) == BATCH_SIZE or (idx == len(eligible_users) - 1 and batch):
+            if len(batch) == BATCH_SIZE or idx == len(eligible_users) - 1:
+                sent = await send_batch_tag(chat_id, text, batch)
+                tagged += sent
+                batch = []
 
-                sent_count = await send_batch_tag(chat_id, text, batch)
-                tagged += sent_count
-
-                batch = []  # reset batch
-
-                # progress update every 3 batches
-                if tagged % (BATCH_SIZE * 3) == 0:
+                if tagged % 30 == 0:
                     try:
-                        await progress.edit_text(
-                            f"🚀 Summoning Running...\n\n"
-                            f"✅ Tagged : {tagged}"
-                        )
+                        await progress.edit_text(f"🚀 Tagged: {tagged}/{len(eligible_users)}")
                     except:
                         pass
 
-                # Delay between batches
                 await asyncio.sleep(BATCH_DELAY)
 
         active_tags[chat_id] = False
 
         await progress.edit_text(
             f"✅ Summoning Completed\n\n"
-            f"👥 Total Tagged : {tagged}\n"
-            f"⏭ Skipped (bot/del/dup) : {skipped}"
+            f"👥 Tagged: {tagged}\n"
+            f"⏭ Skipped: {skipped}"
         )
 
-    except Exception:
-
+    except Exception as e:
         active_tags[chat_id] = False
-
         error = traceback.format_exc()
-
         print(error)
-
-        await send_error_log(
-            "SUMMON",
-            error
-        )
-
-        await message.reply_text(
-            "❌ Error Aa Gaya"
-        )
+        await send_error_log("SUMMON", error)
+        await progress.edit_text("❌ Error Aa Gaya")
 
 
-# ---------------- ADMINS (BATCH MODE) ---------------- #
+# ---------------- ADMINS (FIXED + BATCH) ---------------- #
 
 @app.on_message(filters.command("admins", prefixes=["/", ".", "!"]) & filters.group)
 @admin_or_owner
 async def admins_handler(_, message: Message):
+    chat_id = message.chat.id
+
+    if len(message.command) < 2:
+        return await message.reply_text("❌ Example:\n/admins meeting now")
+
+    text = message.text.split(None, 1)[1]
+
+    active_tags[chat_id] = True
+
+    progress = await message.reply_text("👮 Fetching Admins...")
 
     try:
+        admin_users, skipped = await fetch_eligible_users(chat_id, only_admins=True)
 
-        chat_id = message.chat.id
+        if not admin_users:
+            active_tags[chat_id] = False
+            return await progress.edit_text("❌ No Admins Found (besides bots)")
 
-        if len(message.command) < 2:
-
-            return await message.reply_text(
-                "❌ Example:\n/admins meeting now"
-            )
-
-        text = message.text.split(None, 1)[1]
-
-        await send_log(
-            f"👮 ADMINS COMMAND STARTED\n"
-            f"👤 {message.from_user.first_name}"
-        )
-
-        active_tags[chat_id] = True
+        await send_log(f"👮 ADMINS\n👤 {message.from_user.first_name}\n👮 Count: {len(admin_users)}")
 
         tagged = 0
-        skipped = 0
-
-        # Collect all admin users
-        admin_users = []
-        unique_admins = set()
-
-        async for member in app.get_chat_members(
-            chat_id,
-            filter=ChatMembersFilter.ADMINISTRATORS
-        ):
-
-            if not active_tags.get(chat_id):
-                break
-
-            user = member.user
-
-            if user.is_bot:
-                skipped += 1
-                continue
-
-            if user.id in unique_admins:
-                skipped += 1
-                continue
-
-            unique_admins.add(user.id)
-            admin_users.append(user)
-
-        # Batch tag admins
         batch = []
 
         for idx, user in enumerate(admin_users):
-
             if not active_tags.get(chat_id):
                 break
 
             batch.append(user)
 
-            if len(batch) == BATCH_SIZE or (idx == len(admin_users) - 1 and batch):
-
-                sent_count = await send_batch_tag(chat_id, text, batch)
-                tagged += sent_count
+            if len(batch) == BATCH_SIZE or idx == len(admin_users) - 1:
+                sent = await send_batch_tag(chat_id, text, batch)
+                tagged += sent
                 batch = []
-
                 await asyncio.sleep(BATCH_DELAY)
 
         active_tags[chat_id] = False
 
-        await message.reply_text(
+        await progress.edit_text(
             f"✅ Admin Summon Completed\n\n"
-            f"👮 Tagged : {tagged}\n"
-            f"⏭ Skipped (bots/dup) : {skipped}"
+            f"👮 Tagged: {tagged}\n"
+            f"⏭ Skipped: {skipped}"
         )
 
-    except Exception:
-
-        active_tags[message.chat.id] = False
-
+    except Exception as e:
+        active_tags[chat_id] = False
         error = traceback.format_exc()
-
         print(error)
-
-        await send_error_log(
-            "ADMINS",
-            error
-        )
-
-        await message.reply_text(
-            "❌ Error Aa Gaya"
-        )
+        await send_error_log("ADMINS", error)
+        await progress.edit_text("❌ Error Aa Gaya")
 
 
 # ---------------- HELP ---------------- #
 
 @app.on_message(filters.command("help", prefixes=["/", ".", "!"]))
-@admin_or_owner
 async def help_command(_, message: Message):
-
     await message.reply_text(
         "📚 COMMANDS\n\n"
-        "/summon message\n"
-        "→ Summon All Members (3 per msg)\n\n"
-        "/admins message\n"
-        "→ Summon All Admins (3 per msg)\n\n"
-        "/stoptag\n"
-        "→ Stop Running Summon\n\n"
-        "/blacklist\n"
-        "→ Disable Summon In Group\n\n"
-        "/whitelist\n"
-        "→ Enable Summon In Group\n\n"
-        "/ping\n"
-        "→ Check Userbot"
+        "/summon message → Tag Members (3/msg)\n"
+        "/admins message → Tag Admins (3/msg)\n"
+        "/stoptag → Stop Summon\n"
+        "/blacklist → Block Group\n"
+        "/whitelist → Unblock Group\n"
+        "/ping → Check Bot"
     )
 
 
 # ---------------- START ---------------- #
 
-print("✅ Userbot Started Successfully (Batch Mode = 3)")
+print("✅ Userbot Started (Batch=3, Limit=5k)")
 
 try:
-
     app.run()
-
 except Exception as e:
-
     print(e)
