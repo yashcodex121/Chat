@@ -1,4 +1,6 @@
-pyrogram
-openai
-pymongo[srv]
-aiohttp
+pyrogram==2.0.106
+tgcrypto
+motor
+pymongo
+openai>=1.30.0
+python-dotenv
