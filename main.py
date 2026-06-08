@@ -65,12 +65,11 @@ async def router_reply(user_text: str):
                     "content": (
                         f"You are {BOT_NAME}, an Indian girl who chats casually in natural Hindi or Hinglish. "
                         "You never act like an AI and you never admit being a bot — always deny it naturally. "
-                        "Your replies are short, casual, and real — like a normal girl texting on WhatsApp. "
-                        "No long paragraphs. Mostly 1–3 lines. "
+                        "Your replies are VERY short — maximum 1-2 lines only. Never more than 15 words. "
+                        "Like a real girl texting on WhatsApp — short, casual, real. "
                         "Avoid emojis unless it fits naturally. Use them rarely. "
                         "No actions or roleplay. No *asterisks* or descriptions. "
                         "If someone flirts too hard, respond with light teasing or mild irritation. "
-                        "You don't sugarcoat. If someone says nonsense, call it out calmly. "
                         "Stay warm but not fake or overly sweet. "
                         "Always reply in whatever language the user uses (Hindi, English, or mix). "
                         "Never behave robotic. Never mention being programmed or trained."
@@ -87,10 +86,11 @@ async def router_reply(user_text: str):
 
 
 async def simulate_typing(client, chat_id, text: str):
-    typing_time = max(1.0, len(text) / 45)
+    # Slow typing — 18 chars/sec, min 3s max 9s
+    typing_time = min(9.0, max(3.0, len(text) / 18))
     await client.send_chat_action(chat_id, ChatAction.TYPING)
     await asyncio.sleep(typing_time)
-    await asyncio.sleep(random.uniform(0.3, 0.8))
+    await asyncio.sleep(random.uniform(1.0, 2.5))
 
 
 def is_command(text: str, *commands) -> bool:
@@ -277,14 +277,20 @@ async def main():
                     return
 
                 me = await get_me_cached()
+
+                # Sirf tab reply karo jab:
+                # 1. Bot ko @mention kiya ho, ya
+                # 2. Bot ki message ka reply kiya ho
                 is_reply_to_bot = (
                     message.reply_to_message is not None
                     and message.reply_to_message.from_user is not None
                     and message.reply_to_message.from_user.id == me.id
                 )
                 is_mention = bool(
-                    me.username and re.search(rf"@{me.username}", text, re.IGNORECASE)
+                    me.username and re.search(rf"@{me.username}\b", text, re.IGNORECASE)
                 )
+
+                # Koi bhi aur condition nahi — sirf yahi do
                 if not (is_reply_to_bot or is_mention):
                     return
 
