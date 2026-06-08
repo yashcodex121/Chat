@@ -285,7 +285,15 @@ async def main():
 
     print(f"✅ {BOT_NAME} Userbot Starting...")
     await app.start()
-    await send_log(f"✅ {BOT_NAME} Userbot Started on Heroku!")
+
+    # Debug: logged-in account info print karo
+    me = await app.get_me()
+    print(f"🔐 Logged in as: {me.first_name} | @{me.username} | ID: {me.id}")
+
+    # Debug: kitne handlers register hue
+    print(f"📋 Registered handlers: {len(app.dispatcher.groups)}")
+
+    await send_log(f"✅ {BOT_NAME} Userbot Started!\n👤 @{me.username} | {me.id}")
     print(f"✅ {BOT_NAME} Userbot Running. Waiting for messages...")
 
     # Pyrogram ka official idle — process alive + signals handle karta hai
