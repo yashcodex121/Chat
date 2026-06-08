@@ -8,6 +8,7 @@ import random
 
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.enums import ChatAction
 
 from openai import AsyncOpenAI
 from tagbot import register_tagbot
@@ -88,7 +89,7 @@ async def router_reply(user_text: str):
 
 async def simulate_typing(client, chat_id, text: str):
     typing_time = max(1.0, len(text) / 45)
-    await client.send_chat_action(chat_id, "typing")
+    await client.send_chat_action(chat_id, ChatAction.TYPING)
     await asyncio.sleep(typing_time)
     await asyncio.sleep(random.uniform(0.3, 0.8))
 
@@ -140,7 +141,7 @@ async def main():
     async def dm_handler(client, message: Message):
         if not message.text:
             return
-        await client.send_chat_action(message.chat.id, "typing")
+        await client.send_chat_action(message.chat.id, ChatAction.TYPING)
         await asyncio.sleep(random.uniform(1.0, 2.5))
         await message.reply(DM_LINK)
 
