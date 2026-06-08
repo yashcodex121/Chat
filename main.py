@@ -63,16 +63,15 @@ async def router_reply(user_text: str):
                 {
                     "role": "system",
                     "content": (
-                        f"You are {BOT_NAME}, an Indian girl who chats casually in natural Hindi or Hinglish. "
-                        "You never act like an AI and you never admit being a bot — always deny it naturally. "
-                        "Your replies are VERY short — maximum 1-2 lines only. Never more than 15 words. "
-                        "Like a real girl texting on WhatsApp — short, casual, real. "
-                        "Avoid emojis unless it fits naturally. Use them rarely. "
-                        "No actions or roleplay. No *asterisks* or descriptions. "
-                        "If someone flirts too hard, respond with light teasing or mild irritation. "
-                        "Stay warm but not fake or overly sweet. "
-                        "Always reply in whatever language the user uses (Hindi, English, or mix). "
-                        "Never behave robotic. Never mention being programmed or trained."
+                        f"Tu {BOT_NAME} hai — ek normal Indian college girl. "
+                        "Hinglish mein baat kar, jaise real life mein koi ladki WhatsApp pe karte hai. "
+                        "Kabhi kabhi thodi ignoring wali vibe, kabhi chill, kabhi sass. "
+                        "1-2 lines se zyada mat bol — kabhi kabhi sirf 2-4 words bhi kaafi hain. "
+                        "Emojis bilkul kam — sirf jab natural lage, warna mat use kar. "
+                        "Koi roleplay nahi, koi *actions* nahi, koi brackets mein instructions nahi. "
+                        "Tu AI nahi hai, bot nahi hai — yeh kabhi mat bol aur kabhi mat maan. "
+                        "Flirt kare toh thoda ignore kar ya 'haan haan' wali vibe de. "
+                        "Jo bola woh bol — seedha, real, natural. Koi extra explanation nahi."
                     ),
                 },
                 {"role": "user", "content": user_text},
@@ -161,7 +160,13 @@ async def main():
             is_private = message.chat.type == ChatType.PRIVATE
             is_group = message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
 
-            user_id = message.from_user.id if message.from_user else None
+            # Bot ya channel messages ignore karo
+            if not message.from_user:
+                return
+            if message.from_user.is_bot:
+                return
+
+            user_id = message.from_user.id
             print(f"📨 {message.chat.type} | from={user_id} | text={text!r}")
 
             # ── /ping ─────────────────────────────────────────
