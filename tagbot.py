@@ -1,5 +1,4 @@
 # tagbot.py — TagBot Module (Pyrogram)
-# Yeh file sirf tagging ke liye hai — main.py se import hoti hai
 
 import asyncio
 import traceback
@@ -7,19 +6,19 @@ import traceback
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatMembersFilter, ParseMode
-from pyrogram.errors import FloodWait
+from pyrogram.errors import FloodWait, ChatAdminRequired, UserNotParticipant
 
 # ============================================================ #
 #                      TAGBOT CONFIG
 # ============================================================ #
 
-BATCH_SIZE = 3        # Ek message mein kitne log tag hon
-BATCH_DELAY = 6       # Har batch ke baad kitne seconds wait karein
-COOLDOWN_SEC = 180    # Ek summon ke baad dobara summon ka wait time
-MAX_FETCH = 5000      # Max kitne members fetch karein
+BATCH_SIZE  = 3
+BATCH_DELAY = 6
+COOLDOWN_SEC = 180
+MAX_FETCH   = 5000
 
-active_tags: dict = {}
-tag_cooldown: dict = {}
+active_tags: dict    = {}
+tag_cooldown: dict   = {}
 blacklist_groups: set = set()
 
 
@@ -28,7 +27,6 @@ blacklist_groups: set = set()
 # ============================================================ #
 
 async def is_admin_or_owner(app: Client, user_id: int, chat_id: int, owner_id: int) -> bool:
-    """Check karo user admin ya owner hai ya nahi."""
     if user_id == owner_id:
         return True
     try:
@@ -46,18 +44,45 @@ async def is_admin_or_owner(app: Client, user_id: int, chat_id: int, owner_id: i
 
 async def fetch_users(client: Client, chat_id: int, only_admins: bool = False):
     """
-    Group ke eligible users fetch karo.
+    Saare eligible users fetch karo.
+    RECENT sirf active members deta hai — ALL filter use karo full list ke liye.
     Returns: (eligible_list, skipped_count)
     """
     eligible = []
-    unique = set()
-    skipped = 0
-    count = 0
+    unique   = set()
+    skipped  = 0
+    count    = 0
 
-    filter_type = ChatMembersFilter.ADMINISTRATORS if only_admins else ChatMembersFilter.RECENT
+    if only_admins:
+        filters_to_try = [ChatMembersFilter.ADMINISTRATORS]
+    else:
+        # Pehle ALL try karo, agar permission nahi toh RECENT fallback
+        filters_to_try = [ChatMembersFilter.ALL, ChatMembersFilter.RECENT]
+
+    used_filter = None
+    members_iter = None
+
+    for f in filters_to_try:
+        try:
+            # Test karo ki yeh filter kaam karta hai
+            test = client.get_chat_members(chat_id, filter=f)
+            # Ek item fetch karke check karo
+            async for _ in test:
+                break
+            members_iter = client.get_chat_members(chat_id, filter=f)
+            used_filter = f
+            print(f"[TagBot] Using filter: {f}")
+            break
+        except Exception as e:
+            print(f"[TagBot] Filter {f} failed: {e}, trying next...")
+            continue
+
+    if members_iter is None:
+        print("[TagBot] No working filter found")
+        return [], 0
 
     try:
-        async for member in client.get_chat_members(chat_id, filter=filter_type):
+        async for member in members_iter:
             count += 1
             if count > MAX_FETCH:
                 break
@@ -79,6 +104,7 @@ async def fetch_users(client: Client, chat_id: int, only_admins: bool = False):
         print(f"[TagBot] Fetch error: {e}")
         raise
 
+    print(f"[TagBot] Fetched: {len(eligible)} eligible, {skipped} skipped")
     return eligible, skipped
 
 
@@ -87,10 +113,6 @@ async def fetch_users(client: Client, chat_id: int, only_admins: bool = False):
 # ============================================================ #
 
 async def send_batch(client: Client, chat_id: int, text: str, users_batch: list) -> int:
-    """
-    Ek batch message bhejo jisme BATCH_SIZE log mention hon.
-    Returns: successfully tagged count
-    """
     if not users_batch:
         return 0
 
@@ -122,19 +144,12 @@ async def send_batch(client: Client, chat_id: int, text: str, users_batch: list)
 # ============================================================ #
 
 def register_tagbot(app: Client, owner_id: int, error_log_fn):
-    """
-    Saare TagBot handlers register karo.
-    app         → Pyrogram Client
-    owner_id    → Bot owner ka Telegram ID
-    error_log_fn → async function(command_name, error_text)
-    """
 
     # ── /summon ──────────────────────────────────────────────
 
     @app.on_message(filters.command("summon", prefixes=["/", ".", "!"]) & filters.group)
     async def summon_command(client: Client, message: Message):
-        """Sabko tag karo (3 per message)."""
-        user = message.from_user
+        user    = message.from_user
         chat_id = message.chat.id
 
         if not await is_admin_or_owner(client, user.id, chat_id, owner_id):
@@ -149,12 +164,11 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
             return await message.reply(f"❌ Anti-spam active. Wait {remaining} seconds.")
 
         if len(message.command) < 2:
-            return await message.reply("❌ Usage:\n`/summon <message>`", quote=True)
+            return await message.reply("❌ Usage: /summon <message>")
 
         text = message.text.split(None, 1)[1]
         tag_cooldown[chat_id] = now + COOLDOWN_SEC
-        active_tags[chat_id] = True
-
+        active_tags[chat_id]  = True
         progress = await message.reply("🚀 Collecting members...")
 
         try:
@@ -168,7 +182,7 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
             await progress.edit_text(f"🚀 Summoning {total} members...")
 
             tagged = 0
-            batch = []
+            batch  = []
 
             for idx, u in enumerate(eligible):
                 if not active_tags.get(chat_id, False):
@@ -178,50 +192,42 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
                 batch.append(u)
 
                 if len(batch) == BATCH_SIZE or idx == total - 1:
-                    sent = await send_batch(client, chat_id, text, batch)
-                    tagged += sent
+                    tagged += await send_batch(client, chat_id, text, batch)
                     batch = []
-
-                    # Har 30 tags pe progress update
                     if tagged > 0 and tagged % 30 == 0:
                         try:
                             await progress.edit_text(f"🚀 Tagged: {tagged}/{total}")
                         except Exception:
                             pass
-
                     await asyncio.sleep(BATCH_DELAY)
 
             active_tags[chat_id] = False
             await progress.edit_text(
-                f"✅ Summoning Complete!\n\n"
-                f"👥 Tagged: {tagged}\n"
-                f"⏭ Skipped (bots/deleted): {skipped}"
+                f"✅ Summoning Complete!\n\n👥 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
 
         except Exception:
             active_tags[chat_id] = False
-            error = traceback.format_exc()
-            print(error)
-            await error_log_fn("SUMMON", error)
+            err = traceback.format_exc()
+            print(err)
+            await error_log_fn("SUMMON", err)
             await progress.edit_text("❌ Error occurred during summoning")
 
     # ── /admins ──────────────────────────────────────────────
 
     @app.on_message(filters.command("admins", prefixes=["/", ".", "!"]) & filters.group)
     async def admins_command(client: Client, message: Message):
-        """Sirf admins ko tag karo."""
-        user = message.from_user
+        user    = message.from_user
         chat_id = message.chat.id
 
         if not await is_admin_or_owner(client, user.id, chat_id, owner_id):
             return await message.reply("» Only admins can use this command")
 
         if len(message.command) < 2:
-            return await message.reply("❌ Usage:\n`/admins <message>`", quote=True)
+            return await message.reply("❌ Usage: /admins <message>")
 
         text = message.text.split(None, 1)[1]
         active_tags[chat_id] = True
-
         progress = await message.reply("👮 Fetching admins...")
 
         try:
@@ -231,9 +237,9 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
                 active_tags[chat_id] = False
                 return await progress.edit_text("❌ No admin users found")
 
-            total = len(eligible)
+            total  = len(eligible)
             tagged = 0
-            batch = []
+            batch  = []
 
             for idx, u in enumerate(eligible):
                 if not active_tags.get(chat_id, False):
@@ -242,37 +248,30 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
                 batch.append(u)
 
                 if len(batch) == BATCH_SIZE or idx == total - 1:
-                    sent = await send_batch(client, chat_id, text, batch)
-                    tagged += sent
+                    tagged += await send_batch(client, chat_id, text, batch)
                     batch = []
                     await asyncio.sleep(BATCH_DELAY)
 
             active_tags[chat_id] = False
             await progress.edit_text(
-                f"✅ Admin summon complete!\n\n"
-                f"👮 Tagged: {tagged}\n"
-                f"⏭ Skipped: {skipped}"
+                f"✅ Admin summon complete!\n\n👮 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
 
         except Exception:
             active_tags[chat_id] = False
-            error = traceback.format_exc()
-            print(error)
-            await error_log_fn("ADMINS", error)
+            err = traceback.format_exc()
+            print(err)
+            await error_log_fn("ADMINS", err)
             await progress.edit_text("❌ Error occurred")
 
     # ── /stoptag ─────────────────────────────────────────────
 
     @app.on_message(filters.command("stoptag", prefixes=["/", ".", "!"]) & filters.group)
     async def stop_tag_command(client: Client, message: Message):
-        """Chal raha summon rok do."""
-        user = message.from_user
-        chat_id = message.chat.id
-
-        if not await is_admin_or_owner(client, user.id, chat_id, owner_id):
+        if not await is_admin_or_owner(client, message.from_user.id, message.chat.id, owner_id):
             return await message.reply("» Only admins can use this command")
-
-        if chat_id in active_tags and active_tags[chat_id]:
+        chat_id = message.chat.id
+        if active_tags.get(chat_id, False):
             active_tags[chat_id] = False
             await message.reply("🛑 Summoning stopped")
         else:
@@ -282,7 +281,6 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
 
     @app.on_message(filters.command("blacklist", prefixes=["/", ".", "!"]) & filters.group)
     async def blacklist_command(client: Client, message: Message):
-        """Group ko summon se blacklist karo (owner only)."""
         if message.from_user.id != owner_id:
             return await message.reply("» Only bot owner can use this")
         blacklist_groups.add(message.chat.id)
@@ -292,7 +290,6 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
 
     @app.on_message(filters.command("whitelist", prefixes=["/", ".", "!"]) & filters.group)
     async def whitelist_command(client: Client, message: Message):
-        """Group ko blacklist se hatao (owner only)."""
         if message.from_user.id != owner_id:
             return await message.reply("» Only bot owner can use this")
         blacklist_groups.discard(message.chat.id)
