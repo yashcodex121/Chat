@@ -1,4 +1,4 @@
-# main.py — Chatbot + TagBot Userbot (Pyrogram)
+[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: # main.py — Chatbot + TagBot Userbot (Pyrogram)
 # Heroku Compatible
 
 import os
@@ -11,7 +11,6 @@ from pyrogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineK
 from pyrogram.enums import ChatAction
 
 from openai import AsyncOpenAI
-from tagbot import register_tagbot
 
 # ============================================================ #
 #                      CUSTOMIZE YAHAN KAREIN
@@ -93,8 +92,8 @@ async def simulate_typing(client, chat_id, text: str):
     await asyncio.sleep(typing_time)
     await asyncio.sleep(random.uniform(0.3, 0.8))
 
+
 def is_command(text: str, *commands) -> bool:
-    """Manual command check — filters.command ka replacement."""
     if not text:
         return False
     text = text.strip()
@@ -105,9 +104,7 @@ def is_command(text: str, *commands) -> bool:
         return False
     cmd = parts[0].split("@")[0].lower()
     return cmd in commands
-
-
-# ============================================================ #
+[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: # ============================================================ #
 #                      MAIN
 # ============================================================ #
 
@@ -120,13 +117,21 @@ async def main():
         sleep_threshold=60,
     )
 
+    # Bot ki apni ID cache karenge — har message pe get_me() call avoid karne ke liye
+    _me_cache = {}
+
+    async def get_me_cached():
+        if "me" not in _me_cache:
+            _me_cache["me"] = await app.get_me()
+        return _me_cache["me"]
+
     async def send_error_log(command_name: str, error_text: str):
         if LOG_GROUP_ID == 0:
             print(f"ERROR [{command_name}]: {error_text[-300:]}")
             return
         try:
             short = "\n".join(error_text.splitlines()[-6:])
-            await app.send_message(LOG_GROUP_ID, f"❌ ERROR\n📌 {command_name}\n\n`{short}`")
+            await app.send_message(LOG_GROUP_ID, f"❌ ERROR\n📌 {command_name}\n\n{short}")
         except Exception as e:
             print(f"Log send failed: {e}")
 
@@ -138,121 +143,160 @@ async def main():
         except Exception:
             pass
 
-    # ── SINGLE MESSAGE HANDLER — sabko yahan handle karo ─────
+    # ── TagBot imports ────────────────────────────────────────
+    from tagbot import fetch_users, send_batch, is_admin_or_owner
+    from tagbot import active_tags, tag_cooldown, blacklist_groups, COOLDOWN_SEC, BATCH_SIZE, BATCH_DELAY
+    import traceback
+
+    # ── SINGLE MESSAGE HANDLER ────────────────────────────────
 
     @app.on_message(~filters.me)
     async def message_router(client, message: Message):
-        text = message.text or ""
-        chat_id = message.chat.id
-        from pyrogram.enums import ChatType
-        is_private = message.chat.type == ChatType.PRIVATE
-        is_group = message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
+        try:
+            text = message.text or ""
+            chat_id = message.chat.id
+            from pyrogram.enums import ChatType
+            is_private = message.chat.type == ChatType.PRIVATE
+            is_group = message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
 
-        print(f"📨 {message.chat.type} | from={message.from_user.id if message.from_user else 'N/A'} | text={text!r}")
+            user_id = message.from_user.id if message.from_user else None
+            print(f"📨 {message.chat.type} | from={user_id} | text={text!r}")
 
-        # ── /ping ─────────────────────────────────────────────
-        if is_command(text, "ping"):
-            await message.reply(f"✅ {BOT_NAME} Userbot Active")
-            return
-
-        # ── /help ─────────────────────────────────────────────
-        if is_command(text, "help"):
-            await message.reply(
-                f"📚 **{BOT_NAME} Commands**\n\n"
-                "**Chatbot:**\n"
-                "🔹 /chatbot — Toggle chatbot on/off in group\n"
-                "🔹 Reply or @mention to chat\n\n"
-                "**TagBot:**\n"
-                "🔹 /summon <msg> — Tag all members\n"
-                "🔹 /admins <msg> — Tag all admins\n"
-                "🔹 /stoptag — Stop running summon\n"
-                "🔹 /blacklist — Block summon (owner)\n"
-                "🔹 /whitelist — Allow summon (owner)\n\n"
-                "**Other:**\n"
-                "🔹 /ping — Check bot status\n"
-                "🔹 /help — Show this help\n\n"
-                f"⚡️ DM me → link milega"
-            )
-            return
-
-        # ── /chatbot ──────────────────────────────────────────
-        if is_command(text, "chatbot") and is_group:
-            if chat_bot_groups is None:
-                await message.reply("❌ MongoDB not configured.")
-                return
-            from tagbot import is_admin_or_owner
-            if not await is_admin_or_owner(client, message.from_user.id, chat_id, OWNER_ID):
-                await message.reply("» You must be an admin to manage chatbot")
-                return
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Enable",  callback_data=f"cb_on:{chat_id}"),
-                InlineKeyboardButton("❌ Disable", callback_data=f"cb_off:{chat_id}"),
-            ]])
-            await message.reply(f"• {BOT_NAME} Chatbot — Choose:", reply_markup=kb)
-            return
-
-        # ── /summon ───────────────────────────────────────────
-        if is_command(text, "summon") and is_group:
-            await handle_summon(client, message)
-            return
-
-        # ── /admins ───────────────────────────────────────────
-        if is_command(text, "admins") and is_group:
-            await handle_admins(client, message)
-            return
-
-        # ── /stoptag ──────────────────────────────────────────
-        if is_command(text, "stoptag") and is_group:
-            await handle_stoptag(client, message)
-            return
-
-        # ── /blacklist ────────────────────────────────────────
-        if is_command(text, "blacklist") and is_group:
-            await handle_blacklist(client, message)
-            return
-
-        # ── /whitelist ────────────────────────────────────────
-        if is_command(text, "whitelist") and is_group:
-            await handle_whitelist(client, message)
-            return
-
-        # ── DM: link bhejo ────────────────────────────────────
-        if is_private and text and not text.startswith(("/", "!", ".")):
-            await client.send_chat_action(chat_id, ChatAction.TYPING)
-            await asyncio.sleep(random.uniform(1.0, 2.5))
-            await message.reply(DM_LINK)
-            return
-
-        # ── Group chatbot ─────────────────────────────────────
-        if is_group and text and not text.startswith(("/", "!", ".")):
-            if chat_bot_groups is None:
-                return
-            data = await chat_bot_groups.find_one({"chat_id": chat_id, "enabled": True})
-            if not data:
+            # ── /ping ─────────────────────────────────────────
+            if is_command(text, "ping"):
+                await message.reply(f"✅ {BOT_NAME} Userbot Active")
                 return
 
-            me = await client.get_me()
-            is_reply_to_bot = (
-                message.reply_to_message is not None
-                and message.reply_to_message.from_user is not None
-                and message.reply_to_message.from_user.id == me.id
-            )
-            is_mention = bool(
-                me.username and re.search(rf"@{me.username}", text, re.IGNORECASE)
-            )
-            if not (is_reply_to_bot or is_mention):
+            # ── /help ─────────────────────────────────────────
+            if is_command(text, "help"):
+                await message.reply(
+                    f"📚 {BOT_NAME} Commands\n\n"
+                    "Chatbot:\n"
+                    "🔹 /chatbot on — Enable chatbot in group\n"
+                    "🔹 /chatbot off — Disable chatbot in group\n"
+                    "🔹 Reply or @mention to chat\n\n"
+                    "TagBot:\n"
+                    "🔹 /summon <msg> — Tag all members\n"
+                    "🔹 /admins <msg> — Tag all admins\n"
+                    "🔹 /stoptag — Stop running summon\n"
+                    "🔹 /blacklist — Block summon (owner)\n"
+                    "🔹 /whitelist — Allow summon (owner)\n\n"
+                    "Other:\n"
+                    "🔹 /ping — Check bot status\n"
+                    "🔹 /help — Show this help"
+                )
                 return
 
-            clean_text = re.sub(rf"@{me.username}", "", text, flags=re.IGNORECASE).strip() if me.username else text
-            if not clean_text:
+            # ── /chatbot ──────────────────────────────────────
+            if is_command(text, "chatbot") and is_group:
+                print(f"🔧 /chatbot command — user={user_id}, chat={chat_id}, OWNER_ID={OWNER_ID}")
+
+                if chat_bot_groups is None:
+                    await message.reply("❌ MongoDB not configured.")
+                    return
+
+                # Admin check
+                try:
+                    is_auth = await is_admin_or_owner(client, user_id, chat_id, OWNER_ID)
+                    print(f"🔧 is_admin_or_owner result: {is_auth}")
+                except Exception as e:
+                    print(f"🔧 is_admin_or_owner EXCEPTION: {e}")
+                    await message.reply(f"❌ Admin check failed: {e}")
+                    return
+[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: if not is_auth:
+                    await message.reply("» You must be an admin to manage chatbot")
+                    return
+
+                # /chatbot on / /chatbot off bhi support karo inline
+                parts = text.strip().split()
+                sub = parts[1].lower() if len(parts) > 1 else None
+
+                if sub == "on":
+                    await chat_bot_groups.update_one(
+                        {"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True
+                    )
+                    await message.reply(f"✅ {BOT_NAME} chatbot enabled in this group!")
+                    return
+
+                if sub == "off":
+                    await chat_bot_groups.update_one(
+                        {"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True
+                    )
+                    await message.reply(f"❌ {BOT_NAME} chatbot disabled in this group.")
+                    return
+
+                # Inline buttons fallback
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Enable",  callback_data=f"cb_on:{chat_id}"),
+                    InlineKeyboardButton("❌ Disable", callback_data=f"cb_off:{chat_id}"),
+                ]])
+                await message.reply(f"• {BOT_NAME} Chatbot — Choose:", reply_markup=kb)
                 return
 
-            reply = await router_reply(clean_text)
-            if not reply:
+            # ── /summon ───────────────────────────────────────
+            if is_command(text, "summon") and is_group:
+                await handle_summon(client, message)
                 return
 
-            await simulate_typing(client, chat_id, reply)
-            await message.reply(reply)
+            # ── /admins ───────────────────────────────────────
+            if is_command(text, "admins") and is_group:
+                await handle_admins(client, message)
+                return
+
+            # ── /stoptag ──────────────────────────────────────
+            if is_command(text, "stoptag") and is_group:
+                await handle_stoptag(client, message)
+                return
+
+            # ── /blacklist ────────────────────────────────────
+            if is_command(text, "blacklist") and is_group:
+                await handle_blacklist(client, message)
+                return
+
+            # ── /whitelist ────────────────────────────────────
+            if is_command(text, "whitelist") and is_group:
+                await handle_whitelist(client, message)
+                return
+
+            # ── DM: link bhejo ────────────────────────────────
+            if is_private and text and not text.startswith(("/", "!", ".")):
+                await client.send_chat_action(chat_id, ChatAction.TYPING)
+                await asyncio.sleep(random.uniform(1.0, 2.5))
+                await message.reply(DM_LINK)
+                return
+
+            # ── Group chatbot reply ───────────────────────────
+            if is_group and text and not text.startswith(("/", "!", ".")):
+                if chat_bot_groups is None:
+                    return
+                data = await chat_bot_groups.find_one({"chat_id": chat_id, "enabled": True})
+                if not data:
+                    return
+
+                me = await get_me_cached()
+                is_reply_to_bot = (
+                    message.reply_to_message is not None
+                    and message.reply_to_message.from_user is not None
+                    and message.reply_to_message.from_user.id == me.id
+                )
+                is_mention = bool(
+                    me.username and re.search(rf"@{me.username}", text, re.IGNORECASE)
+                )
+                if not (is_reply_to_bot or is_mention):
+                    return
+
+                clean_text = re.sub(rf"@{me.username}", "", text, flags=re.IGNORECASE).strip() if me.username else text
+                if not clean_text:
+                    return
+
+                reply = await router_reply(clean_text)
+                if not reply:
+                    return
+
+                await simulate_typing(client, chat_id, reply)
+                await message.reply(reply)
+[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: except Exception as e:
+            print(f"❌ message_router EXCEPTION: {traceback.format_exc()}")
 
     # ── Callback queries ──────────────────────────────────────
 
@@ -261,33 +305,31 @@ async def main():
         data = cb.data or ""
         print(f"🔘 CALLBACK | data={data!r} | from={cb.from_user.id}")
 
-        if data.startswith("cb_on:"):
-            chat_id = int(data.split(":")[1])
-            from tagbot import is_admin_or_owner
-            if not await is_admin_or_owner(client, cb.from_user.id, chat_id, OWNER_ID):
-                return await cb.answer("Only admins can do this", show_alert=True)
-            if chat_bot_groups is not None:
-                await chat_bot_groups.update_one(
-                    {"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True
-                )
-            await cb.message.edit_text(f"✅ {BOT_NAME} chatbot enabled by {cb.from_user.first_name}!")
+        try:
+            if data.startswith("cb_on:"):
+                chat_id = int(data.split(":")[1])
+                if not await is_admin_or_owner(client, cb.from_user.id, chat_id, OWNER_ID):
+                    return await cb.answer("Only admins can do this", show_alert=True)
+                if chat_bot_groups is not None:
+                    await chat_bot_groups.update_one(
+                        {"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True
+                    )
+                await cb.message.edit_text(f"✅ {BOT_NAME} chatbot enabled by {cb.from_user.first_name}!")
 
-        elif data.startswith("cb_off:"):
-            chat_id = int(data.split(":")[1])
-            from tagbot import is_admin_or_owner
-            if not await is_admin_or_owner(client, cb.from_user.id, chat_id, OWNER_ID):
-                return await cb.answer("Only admins can do this", show_alert=True)
-            if chat_bot_groups is not None:
-                await chat_bot_groups.update_one(
-                    {"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True
-                )
-            await cb.message.edit_text(f"❌ {BOT_NAME} chatbot disabled by {cb.from_user.first_name}...")
+            elif data.startswith("cb_off:"):
+                chat_id = int(data.split(":")[1])
+                if not await is_admin_or_owner(client, cb.from_user.id, chat_id, OWNER_ID):
+                    return await cb.answer("Only admins can do this", show_alert=True)
+                if chat_bot_groups is not None:
+                    await chat_bot_groups.update_one(
+                        {"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True
+                    )
+                await cb.message.edit_text(f"❌ {BOT_NAME} chatbot disabled by {cb.from_user.first_name}...")
 
-    # ── TagBot functions ──────────────────────────────────────
+        except Exception as e:
+            print(f"❌ callback_router EXCEPTION: {e}")
 
-    from tagbot import fetch_users, send_batch, is_admin_or_owner
-    from tagbot import active_tags, tag_cooldown, blacklist_groups, COOLDOWN_SEC, BATCH_SIZE, BATCH_DELAY
-    import traceback
+    # ── TagBot handlers ───────────────────────────────────────
 
     async def handle_summon(client, message: Message):
         user = message.from_user
@@ -338,8 +380,7 @@ async def main():
                         except Exception:
                             pass
                     await asyncio.sleep(BATCH_DELAY)
-
-            active_tags[chat_id] = False
+[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: active_tags[chat_id] = False
             await progress.edit_text(
                 f"✅ Summoning Complete!\n\n👥 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
@@ -384,7 +425,7 @@ async def main():
                     batch = []
                     await asyncio.sleep(BATCH_DELAY)
 
-            active_tags[chat_id] = False  # FIX: yahan sahi indent hai
+            active_tags[chat_id] = False
             await progress.edit_text(
                 f"✅ Admin summon complete!\n\n👮 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
@@ -423,8 +464,11 @@ async def main():
     await app.start()
 
     me = await app.get_me()
+    _me_cache["me"] = me
     print(f"🔐 Logged in as: {me.first_name} | @{me.username} | ID: {me.id}")
     print(f"📋 Registered handler groups: {len(app.dispatcher.groups)}")
+    print(f"🔑 OWNER_ID = {OWNER_ID}")
+    print(f"🗄️  MongoDB = {'Connected' if chat_bot_groups is not None else 'NOT configured'}")
 
     await send_log(f"✅ {BOT_NAME} Started!\n👤 @{me.username} | {me.id}")
     print(f"✅ Running. Waiting for messages...")
@@ -434,5 +478,5 @@ async def main():
     print(f"⛔️ {BOT_NAME} Stopped.")
 
 
-if __name__ == "__main__":
+if name == "main":
     asyncio.run(main())
