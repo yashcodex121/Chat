@@ -6,7 +6,17 @@ import traceback
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatMembersFilter, ParseMode
-from pyrogram.errors import FloodWait, ChatAdminRequired, UserNotParticipant
+from pyrogram.errors import FloodWait, ChatAdminRequired, UserNotParticipant, MessageIdInvalid, MessageNotModified
+
+
+async def safe_edit(msg, text: str):
+    """Edit message safely — agar message delete ho gaya ho toh crash mat karo."""
+    try:
+        await msg.edit_text(text)
+    except (MessageIdInvalid, MessageNotModified):
+        pass
+    except Exception as e:
+        print(f"[TagBot] safe_edit error: {e}")
 
 # ============================================================ #
 #                      TAGBOT CONFIG
@@ -212,17 +222,18 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
 
             if not eligible:
                 active_tags[chat_id] = False
-                return await progress.edit_text("❌ No eligible members found")
+                await safe_edit(progress, "❌ No eligible members found")
+                return
 
             total = len(eligible)
-            await progress.edit_text(f"🚀 Summoning {total} members...")
+            await safe_edit(progress, f"🚀 Summoning {total} members...")
 
             tagged = 0
             batch  = []
 
             for idx, u in enumerate(eligible):
                 if not active_tags.get(chat_id, False):
-                    await progress.edit_text(f"🛑 Stopped. Tagged: {tagged}")
+                    await safe_edit(progress, f"🛑 Stopped. Tagged: {tagged}")
                     return
 
                 batch.append(u)
@@ -232,13 +243,13 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
                     batch = []
                     if tagged > 0 and tagged % 30 == 0:
                         try:
-                            await progress.edit_text(f"🚀 Tagged: {tagged}/{total}")
+                            await safe_edit(progress, f"🚀 Tagged: {tagged}/{total}")
                         except Exception:
                             pass
                     await asyncio.sleep(BATCH_DELAY)
 
             active_tags[chat_id] = False
-            await progress.edit_text(
+            await safe_edit(progress, 
                 f"✅ Summoning Complete!\n\n👥 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
 
@@ -247,7 +258,7 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
             err = traceback.format_exc()
             print(err)
             await error_log_fn("SUMMON", err)
-            await progress.edit_text("❌ Error occurred during summoning")
+            await safe_edit(progress, "❌ Error occurred during summoning")
 
     # ── /admins ──────────────────────────────────────────────
 
@@ -271,7 +282,8 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
 
             if not eligible:
                 active_tags[chat_id] = False
-                return await progress.edit_text("❌ No admin users found")
+                await safe_edit(progress, "❌ No admin users found")
+                return
 
             total  = len(eligible)
             tagged = 0
@@ -289,7 +301,7 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
                     await asyncio.sleep(BATCH_DELAY)
 
             active_tags[chat_id] = False
-            await progress.edit_text(
+            await safe_edit(progress, 
                 f"✅ Admin summon complete!\n\n👮 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
 
@@ -298,7 +310,7 @@ def register_tagbot(app: Client, owner_id: int, error_log_fn):
             err = traceback.format_exc()
             print(err)
             await error_log_fn("ADMINS", err)
-            await progress.edit_text("❌ Error occurred")
+            await safe_edit(progress, "❌ Error occurred")
 
     # ── /stoptag ─────────────────────────────────────────────
 
