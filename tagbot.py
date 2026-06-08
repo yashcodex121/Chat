@@ -43,62 +43,47 @@ async def is_admin_or_owner(app: Client, user_id: int, chat_id: int, owner_id: i
 # ============================================================ #
 
 async def fetch_users(client: Client, chat_id: int, only_admins: bool = False):
-    """
-    Saare eligible users fetch karo.
-    RECENT sirf active members deta hai — ALL filter use karo full list ke liye.
-    Returns: (eligible_list, skipped_count)
-    """
     eligible = []
     unique   = set()
     skipped  = 0
-    count    = 0
-
-    if only_admins:
-        filters_to_try = [ChatMembersFilter.ADMINISTRATORS]
-    else:
-        # Pehle ALL try karo, agar permission nahi toh RECENT fallback
-        filters_to_try = [ChatMembersFilter.ALL, ChatMembersFilter.RECENT]
-
-    used_filter = None
-    members_iter = None
-
-    for f in filters_to_try:
-        try:
-            # Test karo ki yeh filter kaam karta hai
-            test = client.get_chat_members(chat_id, filter=f)
-            # Ek item fetch karke check karo
-            async for _ in test:
-                break
-            members_iter = client.get_chat_members(chat_id, filter=f)
-            used_filter = f
-            print(f"[TagBot] Using filter: {f}")
-            break
-        except Exception as e:
-            print(f"[TagBot] Filter {f} failed: {e}, trying next...")
-            continue
-
-    if members_iter is None:
-        print("[TagBot] No working filter found")
-        return [], 0
 
     try:
-        async for member in members_iter:
-            count += 1
-            if count > MAX_FETCH:
-                break
+        if only_admins:
+            async for member in client.get_chat_members(chat_id, filter=ChatMembersFilter.ADMINISTRATORS):
+                user = member.user
+                if user.is_deleted or user.is_bot:
+                    skipped += 1
+                    continue
+                if user.id in unique:
+                    skipped += 1
+                    continue
+                unique.add(user.id)
+                eligible.append(user)
+        else:
+            # Saare members fetch karne ke liye a-z search trick
+            # Pyrogram userbot mein yeh saare members deta hai
+            searched = set()
+            queries = list("abcdefghijklmnopqrstuvwxyz0123456789") + [""]
 
-            user = member.user
-
-            if user.is_deleted or user.is_bot:
-                skipped += 1
-                continue
-
-            if user.id in unique:
-                skipped += 1
-                continue
-
-            unique.add(user.id)
-            eligible.append(user)
+            for q in queries:
+                if len(unique) >= MAX_FETCH:
+                    break
+                try:
+                    async for member in client.get_chat_members(chat_id, query=q):
+                        user = member.user
+                        if user.id in searched:
+                            continue
+                        searched.add(user.id)
+                        if user.is_deleted or user.is_bot:
+                            skipped += 1
+                            continue
+                        if user.id in unique:
+                            continue
+                        unique.add(user.id)
+                        eligible.append(user)
+                except Exception as e:
+                    print(f"[TagBot] Query '{q}' error: {e}")
+                    continue
 
     except Exception as e:
         print(f"[TagBot] Fetch error: {e}")
