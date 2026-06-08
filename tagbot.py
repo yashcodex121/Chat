@@ -15,7 +15,7 @@ from pyrogram.errors import FloodWait, ChatAdminRequired, UserNotParticipant
 BATCH_SIZE  = 3
 BATCH_DELAY = 6
 COOLDOWN_SEC = 180
-MAX_FETCH   = 5000
+MAX_FETCH   = 10000
 
 active_tags: dict    = {}
 tag_cooldown: dict   = {}
@@ -60,20 +60,31 @@ async def fetch_users(client: Client, chat_id: int, only_admins: bool = False):
                 unique.add(user.id)
                 eligible.append(user)
         else:
-            # Saare members fetch karne ke liye a-z search trick
-            # Pyrogram userbot mein yeh saare members deta hai
-            searched = set()
-            queries = list("abcdefghijklmnopqrstuvwxyz0123456789") + [""]
+            # Method 1: Direct pagination with offset (5k+ groups ke liye)
+            offset = 0
+            limit  = 200
+            empty_streak = 0
 
-            for q in queries:
-                if len(unique) >= MAX_FETCH:
-                    break
+            while len(unique) < MAX_FETCH:
                 try:
-                    async for member in client.get_chat_members(chat_id, query=q):
+                    batch_members = await client.get_chat_members(
+                        chat_id,
+                        filter=ChatMembersFilter.RECENT,
+                        offset=offset,
+                        limit=limit,
+                    )
+                    if not batch_members:
+                        empty_streak += 1
+                        if empty_streak >= 3:
+                            break
+                        offset += limit
+                        continue
+
+                    empty_streak = 0
+                    added_this_batch = 0
+
+                    for member in batch_members:
                         user = member.user
-                        if user.id in searched:
-                            continue
-                        searched.add(user.id)
                         if user.is_deleted or user.is_bot:
                             skipped += 1
                             continue
@@ -81,6 +92,46 @@ async def fetch_users(client: Client, chat_id: int, only_admins: bool = False):
                             continue
                         unique.add(user.id)
                         eligible.append(user)
+                        added_this_batch += 1
+
+                    print(f"[TagBot] offset={offset} fetched={len(batch_members)} new={added_this_batch} total={len(unique)}")
+
+                    # Agar 3 consecutive batches mein koi naya nahi mila toh band karo
+                    if added_this_batch == 0:
+                        empty_streak += 1
+                        if empty_streak >= 3:
+                            break
+                    else:
+                        empty_streak = 0
+
+                    offset += limit
+                    await asyncio.sleep(0.5)  # Rate limit avoid
+
+                except FloodWait as e:
+                    print(f"[TagBot] FloodWait during fetch: {e.value}s")
+                    await asyncio.sleep(e.value + 2)
+                except Exception as e:
+                    print(f"[TagBot] Offset {offset} error: {e}")
+                    break
+
+            # Method 2: a-z search trick — extra members jo offset mein miss hue
+            queries = list("abcdefghijklmnopqrstuvwxyz0123456789")
+            for q in queries:
+                if len(unique) >= MAX_FETCH:
+                    break
+                try:
+                    async for member in client.get_chat_members(chat_id, query=q):
+                        user = member.user
+                        if user.is_deleted or user.is_bot:
+                            skipped += 1
+                            continue
+                        if user.id in unique:
+                            continue
+                        unique.add(user.id)
+                        eligible.append(user)
+                    await asyncio.sleep(0.3)
+                except FloodWait as e:
+                    await asyncio.sleep(e.value + 1)
                 except Exception as e:
                     print(f"[TagBot] Query '{q}' error: {e}")
                     continue
