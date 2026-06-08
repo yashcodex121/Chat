@@ -18,8 +18,8 @@ from openai import AsyncOpenAI
 #                      CUSTOMIZE YAHAN KAREIN
 # ============================================================ #
 
-BOT_NAME = "Alishan"  # 👈 Bot ka naam yahan change karein
-DM_LINK = "https://t.me/your_link_here"  # 👈 DM mein bhejne wala link yahan daalein
+BOT_NAME = "riya"  # 👈 Bot ka naam yahan change karein
+DM_LINK = "https://t.me/hellupdates1"  # 👈 DM mein bhejne wala link yahan daalein
 
 # ============================================================ #
 #                      ENVIRONMENT VARIABLES
