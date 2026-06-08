@@ -93,7 +93,6 @@ async def simulate_typing(client, chat_id, text: str):
     await asyncio.sleep(typing_time)
     await asyncio.sleep(random.uniform(0.3, 0.8))
 
-
 def is_command(text: str, *commands) -> bool:
     """Manual command check — filters.command ka replacement."""
     if not text:
@@ -101,7 +100,6 @@ def is_command(text: str, *commands) -> bool:
     text = text.strip()
     if not text.startswith(("/", "!", ".")):
         return False
-    # /command@username format bhi handle karo
     parts = text[1:].split()
     if not parts:
         return False
@@ -146,10 +144,11 @@ async def main():
     async def message_router(client, message: Message):
         text = message.text or ""
         chat_id = message.chat.id
-        is_private = message.chat.type.value == "private"
-        is_group = message.chat.type.value in ("group", "supergroup")
+        from pyrogram.enums import ChatType
+        is_private = message.chat.type == ChatType.PRIVATE
+        is_group = message.chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
 
-        print(f"📨 {message.chat.type.value} | from={message.from_user.id if message.from_user else 'N/A'} | text={text!r}")
+        print(f"📨 {message.chat.type} | from={message.from_user.id if message.from_user else 'N/A'} | text={text!r}")
 
         # ── /ping ─────────────────────────────────────────────
         if is_command(text, "ping"):
@@ -161,18 +160,18 @@ async def main():
             await message.reply(
                 f"📚 **{BOT_NAME} Commands**\n\n"
                 "**Chatbot:**\n"
-                "🔹 `/chatbot` — Toggle chatbot on/off in group\n"
+                "🔹 /chatbot — Toggle chatbot on/off in group\n"
                 "🔹 Reply or @mention to chat\n\n"
                 "**TagBot:**\n"
-                "🔹 `/summon <msg>` — Tag all members\n"
-                "🔹 `/admins <msg>` — Tag all admins\n"
-                "🔹 `/stoptag` — Stop running summon\n"
-                "🔹 `/blacklist` — Block summon (owner)\n"
-                "🔹 `/whitelist` — Allow summon (owner)\n\n"
+                "🔹 /summon <msg> — Tag all members\n"
+                "🔹 /admins <msg> — Tag all admins\n"
+                "🔹 /stoptag — Stop running summon\n"
+                "🔹 /blacklist — Block summon (owner)\n"
+                "🔹 /whitelist — Allow summon (owner)\n\n"
                 "**Other:**\n"
-                "🔹 `/ping` — Check bot status\n"
-                "🔹 `/help` — Show this help\n\n"
-                f"⚡ DM me → link milega"
+                "🔹 /ping — Check bot status\n"
+                "🔹 /help — Show this help\n\n"
+                f"⚡️ DM me → link milega"
             )
             return
 
@@ -194,7 +193,6 @@ async def main():
 
         # ── /summon ───────────────────────────────────────────
         if is_command(text, "summon") and is_group:
-            # tagbot handle karega — yahan se pass karo
             await handle_summon(client, message)
             return
 
@@ -285,7 +283,7 @@ async def main():
                 )
             await cb.message.edit_text(f"❌ {BOT_NAME} chatbot disabled by {cb.from_user.first_name}...")
 
-    # ── TagBot functions (inline, no decorator) ───────────────
+    # ── TagBot functions ──────────────────────────────────────
 
     from tagbot import fetch_users, send_batch, is_admin_or_owner
     from tagbot import active_tags, tag_cooldown, blacklist_groups, COOLDOWN_SEC, BATCH_SIZE, BATCH_DELAY
@@ -308,7 +306,7 @@ async def main():
 
         parts = message.text.split(None, 1)
         if len(parts) < 2:
-            return await message.reply("❌ Usage: `/summon <message>`")
+            return await message.reply("❌ Usage: /summon <message>")
 
         text = parts[1]
         tag_cooldown[chat_id] = now + COOLDOWN_SEC
@@ -343,7 +341,7 @@ async def main():
 
             active_tags[chat_id] = False
             await progress.edit_text(
-                f"✅ Summoning Complete!\n\n👥 Tagged: {tagged}\n⏭ Skipped: {skipped}"
+                f"✅ Summoning Complete!\n\n👥 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
         except Exception:
             active_tags[chat_id] = False
@@ -361,7 +359,7 @@ async def main():
 
         parts = message.text.split(None, 1)
         if len(parts) < 2:
-            return await message.reply("❌ Usage: `/admins <message>`")
+            return await message.reply("❌ Usage: /admins <message>")
 
         text = parts[1]
         active_tags[chat_id] = True
@@ -386,9 +384,9 @@ async def main():
                     batch = []
                     await asyncio.sleep(BATCH_DELAY)
 
-            active_tags[chat_id] = False
+            active_tags[chat_id] = False  # FIX: yahan sahi indent hai
             await progress.edit_text(
-                f"✅ Admin summon complete!\n\n👮 Tagged: {tagged}\n⏭ Skipped: {skipped}"
+                f"✅ Admin summon complete!\n\n👮 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
         except Exception:
             active_tags[chat_id] = False
@@ -433,7 +431,7 @@ async def main():
 
     await idle()
     await app.stop()
-    print(f"⛔ {BOT_NAME} Stopped.")
+    print(f"⛔️ {BOT_NAME} Stopped.")
 
 
 if __name__ == "__main__":
