@@ -1,4 +1,4 @@
-[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: # main.py — Chatbot + TagBot Userbot (Pyrogram)
+# main.py — Chatbot + TagBot Userbot (Pyrogram)
 # Heroku Compatible
 
 import os
@@ -104,7 +104,9 @@ def is_command(text: str, *commands) -> bool:
         return False
     cmd = parts[0].split("@")[0].lower()
     return cmd in commands
-[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: # ============================================================ #
+
+
+# ============================================================ #
 #                      MAIN
 # ============================================================ #
 
@@ -131,7 +133,7 @@ async def main():
             return
         try:
             short = "\n".join(error_text.splitlines()[-6:])
-            await app.send_message(LOG_GROUP_ID, f"❌ ERROR\n📌 {command_name}\n\n{short}")
+            await app.send_message(LOG_GROUP_ID, f"❌ ERROR\n📌 {command_name}\n\n`{short}`")
         except Exception as e:
             print(f"Log send failed: {e}")
 
@@ -170,18 +172,18 @@ async def main():
             # ── /help ─────────────────────────────────────────
             if is_command(text, "help"):
                 await message.reply(
-                    f"📚 {BOT_NAME} Commands\n\n"
-                    "Chatbot:\n"
+                    f"📚 **{BOT_NAME} Commands**\n\n"
+                    "**Chatbot:**\n"
                     "🔹 /chatbot on — Enable chatbot in group\n"
                     "🔹 /chatbot off — Disable chatbot in group\n"
                     "🔹 Reply or @mention to chat\n\n"
-                    "TagBot:\n"
+                    "**TagBot:**\n"
                     "🔹 /summon <msg> — Tag all members\n"
                     "🔹 /admins <msg> — Tag all admins\n"
                     "🔹 /stoptag — Stop running summon\n"
                     "🔹 /blacklist — Block summon (owner)\n"
                     "🔹 /whitelist — Allow summon (owner)\n\n"
-                    "Other:\n"
+                    "**Other:**\n"
                     "🔹 /ping — Check bot status\n"
                     "🔹 /help — Show this help"
                 )
@@ -203,7 +205,8 @@ async def main():
                     print(f"🔧 is_admin_or_owner EXCEPTION: {e}")
                     await message.reply(f"❌ Admin check failed: {e}")
                     return
-[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: if not is_auth:
+
+                if not is_auth:
                     await message.reply("» You must be an admin to manage chatbot")
                     return
 
@@ -215,14 +218,14 @@ async def main():
                     await chat_bot_groups.update_one(
                         {"chat_id": chat_id}, {"$set": {"enabled": True}}, upsert=True
                     )
-                    await message.reply(f"✅ {BOT_NAME} chatbot enabled in this group!")
+                    await message.reply(f"✅ {BOT_NAME} chatbot **enabled** in this group!")
                     return
 
                 if sub == "off":
                     await chat_bot_groups.update_one(
                         {"chat_id": chat_id}, {"$set": {"enabled": False}}, upsert=True
                     )
-                    await message.reply(f"❌ {BOT_NAME} chatbot disabled in this group.")
+                    await message.reply(f"❌ {BOT_NAME} chatbot **disabled** in this group.")
                     return
 
                 # Inline buttons fallback
@@ -295,7 +298,8 @@ async def main():
 
                 await simulate_typing(client, chat_id, reply)
                 await message.reply(reply)
-[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: except Exception as e:
+
+        except Exception as e:
             print(f"❌ message_router EXCEPTION: {traceback.format_exc()}")
 
     # ── Callback queries ──────────────────────────────────────
@@ -380,7 +384,8 @@ async def main():
                         except Exception:
                             pass
                     await asyncio.sleep(BATCH_DELAY)
-[09-06-2026 04:02] 𝒀𝒂𝒔𝒉: active_tags[chat_id] = False
+
+            active_tags[chat_id] = False
             await progress.edit_text(
                 f"✅ Summoning Complete!\n\n👥 Tagged: {tagged}\n⏭️ Skipped: {skipped}"
             )
@@ -478,5 +483,5 @@ async def main():
     print(f"⛔️ {BOT_NAME} Stopped.")
 
 
-if name == "main":
+if __name__ == "__main__":
     asyncio.run(main())
